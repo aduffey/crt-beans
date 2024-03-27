@@ -2,13 +2,13 @@
 
 layout(set = 0, binding = 0, std140) uniform UBO
 {
-   mat4 MVP;
+    mat4 MVP;
 };
 
 layout(push_constant) uniform Push
 {
-   vec4 SourceSize;
-   float YIQ;
+    vec4 SourceSize;
+    float YIQ;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT

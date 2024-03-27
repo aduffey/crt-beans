@@ -2,16 +2,16 @@
 
 layout(set = 0, binding = 0, std140) uniform UBO
 {
-   mat4 MVP;
+    mat4 MVP;
 };
 
 layout(push_constant) uniform Push
 {
-   vec4 SourceSize;
-   float Cutoff;
-   float ICutoff;
-   float QCutoff;
-   float YIQ;
+    vec4 SourceSize;
+    float Cutoff;
+    float ICutoff;
+    float QCutoff;
+    float YIQ;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
@@ -41,14 +41,14 @@ layout(binding = 1) uniform sampler2D Source;
 #define YIQ_GAMMA_MAT mat3x3(1.0, 1.0, 1.0, 0.946882217090069, -0.274787646298978, -1.108545034642032, 0.623556581986143, -0.63569107918738, 1.709006928406467)
 
 vec3 gamma_to_linear(vec3 rgb) {
-    return pow(rgb, vec3(CRT_GAMMA));
+    // Floating point inaccuracies or out-of-gamut colors from the YIQ
+    // to RGB transform could result in negative values, so we'll clamp
+    // here to avoid NaNs.
+    return pow(clamp(rgb, 0.0, 1.0), vec3(CRT_GAMMA));
 }
 
 vec3 yiq_to_linear(vec3 rgb) {
-    // Theoretically, it is possible for a YIQ -> RGB transformation to result
-    // in out-of-gamut colors, so we'll clamp here. There may also be floating
-    // point inaccuracies.
-    return gamma_to_linear(clamp(YIQ_GAMMA_MAT * rgb, 0.0, 1.0));
+    return gamma_to_linear(YIQ_GAMMA_MAT * rgb);
 }
 
 void main()
@@ -66,7 +66,7 @@ void main()
              pix_x++) {
         vec3 s = texelFetch(Source, ivec2(pix_x, pix_y), 0).rgb;
         vec3 t0 = vec3(pix_x * params.SourceSize.z);
-        vec3 t1 = vec3(t0 + params.SourceSize.z);
+        vec3 t1 = t0 + vec3(params.SourceSize.z);
         t0 = clamp(t0, t - L, t + L);
         t1 = clamp(t1, t - L, t + L);
         // Integral of s * (1 / L) * (0.5 + 0.5 * cos(PI * (t - t_x) / L)) dt_x over t0 to t1

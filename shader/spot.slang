@@ -2,19 +2,22 @@
 
 layout(set = 0, binding = 0, std140) uniform UBO
 {
-   mat4 MVP;
+    mat4 MVP;
 };
 
 layout(push_constant) uniform Push
 {
-   vec4 SourceSize;
-   vec4 OutputSize;
-   float MaxSpotSize;
-   float MinSpotSize;
+    vec4 SourceSize;
+    vec4 OutputSize;
+    uint FrameCount;
+    float MaxSpotSize;
+    float MinSpotSize;
+    float OddFieldFirst;
 } params;
 
 #pragma parameter MaxSpotSize "Maximum spot size" 1.0 0.6 1.0 0.05
 #pragma parameter MinSpotSize "Minimum spot size" 0.5 0.3 1.0 0.1
+#pragma parameter OddFieldFirst "Interlacing - display odd field first" 0.0 0.0 1.0 1.0
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -43,15 +46,33 @@ vec3 linear_to_srgb(vec3 rgb) {
 
 void main() {
     const float aspect_ratio = params.OutputSize.x / params.OutputSize.y;
-    const float delta = ((aspect_ratio) * params.SourceSize.y) / params.SourceSize.x;
+
+    int lower_sample_y, upper_sample_y;
+    float delta, lower_distance_y, upper_distance_y;
+    // Check if we should be deinterlacing.
+    if (params.SourceSize.y > 300) {
+        if ((params.FrameCount + int(params.OddFieldFirst)) % 2 == 0) {
+            lower_sample_y = int(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2 - 2;
+            upper_sample_y = int(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2;
+        } else {
+            lower_sample_y = int(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2 - 1;
+            upper_sample_y = int(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2 + 1;
+        }
+        // TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
+        delta = 0.5 * aspect_ratio * params.SourceSize.y * params.SourceSize.z;
+        lower_distance_y = 0.5 * ((lower_sample_y + 0.5) - vTexCoord.y * params.SourceSize.y);
+        upper_distance_y = 0.5 * ((upper_sample_y + 0.5) - vTexCoord.y * params.SourceSize.y);
+    } else {
+        lower_sample_y = int(round(vTexCoord.y * params.SourceSize.y)) - 1;
+        upper_sample_y = int(round(vTexCoord.y * params.SourceSize.y));
+        delta = aspect_ratio * params.SourceSize.y * params.SourceSize.z;
+        lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * params.SourceSize.y;
+        upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * params.SourceSize.y;
+    }
 
     vec3 value = vec3(0.0);
-    int lower_sample_y = int(round(vTexCoord.y * params.SourceSize.y)) - 1;
-    int upper_sample_y = int(round(vTexCoord.y * params.SourceSize.y));
-    float lower_distance_y = (lower_sample_y + 0.5) - params.SourceSize.y * vTexCoord.y;
-    float upper_distance_y = (upper_sample_y + 0.5) - params.SourceSize.y * vTexCoord.y;
-    for (int sample_x = int(round(vTexCoord.x * params.SourceSize.x - (1.0 / delta)));  // TODO (MaxSpotSize / delta)?
-             sample_x < int(round(vTexCoord.x * params.SourceSize.x + (1.0 / delta)));
+    for (int sample_x = int(round(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)));
+             sample_x < int(round(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta)));
              sample_x++) {
         vec3 lower_sample = texelFetch(Source, ivec2(sample_x, lower_sample_y), 0).rgb;
         vec3 upper_sample = texelFetch(Source, ivec2(sample_x, upper_sample_y), 0).rgb;
@@ -60,7 +81,7 @@ void main() {
         vec3 upper_width_rcp = 1.0 / (params.MaxSpotSize * ((1.0 - params.MinSpotSize) * sqrt(upper_sample) + params.MinSpotSize));
         // Distance units are *scanlines heights*, so we have to adjust x
         // distance with the aspect ratio.
-        float distance_x = aspect_ratio * params.SourceSize.y * ((sample_x + 0.5) * params.SourceSize.z - vTexCoord.x);
+        float distance_x = delta * ((sample_x + 0.5) - vTexCoord.x * params.SourceSize.x);
         vec3 lower_output = (lower_sample * lower_width_rcp * 0.25) *
             (1.0 + cos(PI * clamp(distance_x * lower_width_rcp, -1.0, 1.0))) *
             (1.0 + cos(PI * clamp(lower_distance_y * lower_width_rcp, -1.0, 1.0)));
@@ -69,5 +90,7 @@ void main() {
             (1.0 + cos(PI * clamp(upper_distance_y * upper_width_rcp, -1.0, 1.0)));
         value += lower_output + upper_output;
     }
+    // We shouldn't have any values over 1.0, but we'll clamp just in case
+    // there are small floating point errors.
     FragColor = vec4(linear_to_srgb(clamp(delta * value, 0.0, 1.0)), 1.0);
 }
