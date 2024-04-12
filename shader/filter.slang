@@ -1,12 +1,10 @@
 #version 450
 
-layout(set = 0, binding = 0, std140) uniform UBO
-{
+layout(set = 0, binding = 0, std140) uniform UBO {
     mat4 MVP;
 };
 
-layout(push_constant) uniform Push
-{
+layout(push_constant) uniform Push {
     vec4 SourceSize;
     float Cutoff;
     float ICutoff;
@@ -24,10 +22,10 @@ layout(push_constant) uniform Push
 layout(location = 0) in vec4 Position;
 layout(location = 1) in vec2 TexCoord;
 layout(location = 0) out vec2 vTexCoord;
-void main()
-{
-   gl_Position = MVP * Position;
-   vTexCoord = TexCoord;
+
+void main() {
+    gl_Position = MVP * Position;
+    vTexCoord = TexCoord;
 }
 
 #pragma stage fragment
@@ -51,18 +49,18 @@ vec3 yiq_to_linear(vec3 rgb) {
     return gamma_to_linear(YIQ_GAMMA_MAT * rgb);
 }
 
-void main()
-{
+void main() {
     const vec3 L = params.YIQ > 0.5 ?
         1.0 / (vec3(params.Cutoff, params.ICutoff, params.QCutoff) * 53.33 * 2.0) :
         1.0 / (vec3(params.Cutoff) * 53.33 * 2.0);
-    const float max_L = max(L.r, max(L.g, L.b));
+    const float L_max = max(L.r, max(L.g, L.b));
+    const vec3 L_rcp = 1.0 / L;
 
     vec3 filtered = vec3(0.0);
     int pix_y = int(floor(vTexCoord.y * params.SourceSize.y));
     float t = vTexCoord.x;
-    for (int pix_x = int(floor(params.SourceSize.x * (vTexCoord.x - max_L)));
-             pix_x <= int(floor(params.SourceSize.x * (vTexCoord.x + max_L)));
+    for (int pix_x = int(floor(params.SourceSize.x * (vTexCoord.x - L_max)));
+             pix_x <= int(floor(params.SourceSize.x * (vTexCoord.x + L_max)));
              pix_x++) {
         vec3 s = texelFetch(Source, ivec2(pix_x, pix_y), 0).rgb;
         vec3 t0 = vec3(pix_x * params.SourceSize.z);
@@ -70,12 +68,8 @@ void main()
         t0 = clamp(t0, t - L, t + L);
         t1 = clamp(t1, t - L, t + L);
         // Integral of s * (1 / L) * (0.5 + 0.5 * cos(PI * (t - t_x) / L)) dt_x over t0 to t1
-        filtered += s / (2.0 * L) * (t1 - t0 + (L / PI) * (sin((PI / L) * (t - t0)) - sin((PI / L) * (t - t1))));
+        filtered += 0.5 * s * L_rcp * (t1 - t0 + (L / PI) * (sin(L_rcp * ((PI * t) - PI * t0)) - sin(L_rcp * ((PI * t) - PI * t1))));
     }
 
-    if (params.YIQ > 0.5) {
-        FragColor = vec4(yiq_to_linear(filtered), 1.0);
-    } else {
-        FragColor = vec4(gamma_to_linear(filtered), 1.0);
-    }
+    FragColor = params.YIQ > 0.5 ? vec4(yiq_to_linear(filtered), 1.0) : vec4(gamma_to_linear(filtered), 1.0);
 }

@@ -20,6 +20,10 @@ def srgb_to_gamma(img, out_gamma):
     return out
 
 
+def gamma_to_gamma(img, in_gamma, out_gamma):
+    return np.power(np.power(np.clip(img, 0.0, 1.0), in_gamma), 1.0 / out_gamma)
+
+
 def srgb_to_yiq(img, out_gamma):
     """sRGB uint8 to YIQ float"""
     out = img.astype(np.float32) / 255
@@ -50,7 +54,7 @@ def yiq_to_linear(img, in_gamma):
 
 def linear_to_srgb(img):
     """Linear float to sRGB uint8"""
-    out = np.where(img <= 0.0031308, img * 12.92, 1.055 * (np.power(img, (1.0 / 2.4))) - 0.055)
+    out = np.where(img <= 0.0031308, img * 12.92, 1.055 * (np.power(np.clip(img, 0.0, 1.0), (1.0 / 2.4))) - 0.055)
     out = np.around(out * 255).astype(np.uint8)
     return out
 
@@ -89,6 +93,8 @@ def taichi_filter_fragment(field_in: ti.template(), field_out: ti.template()):
 @ti.func
 def filter_sim(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4) -> tm.vec3:
     max_L = tm.max(tm.max(L.r, L.g), L.b)
+    L_rcp = 1.0 / L
+
     filtered = tm.vec3(0.0)
     pix_y = int(tm.floor(vTexCoord.y * SourceSize.y))
     t = vTexCoord.x
@@ -100,7 +106,8 @@ def filter_sim(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4) -> tm.vec3:
         t0 = tm.clamp(t0, t - L, t + L)
         t1 = tm.clamp(t1, t - L, t + L)
         # Integral of s * (1 / L) * (0.5 + 0.5 * cos(PI * (t - t_x) / L)) dt_x over t0 to t1
-        filtered += s / (2.0 * L) * (t1 - t0 + (L / np.pi) * (tm.sin((np.pi / L) * (t - t0)) - tm.sin((np.pi / L) * (t - t1))))
+        filtered += 0.5 * s * L_rcp * (t1 - t0 + (L / np.pi) *
+                                       (tm.sin(L_rcp * ((np.pi * t) - np.pi * t0)) - tm.sin(L_rcp * ((np.pi * t) - np.pi * t1))))
     return filtered
 
 
@@ -132,6 +139,8 @@ def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) 
 
     lower_sample_y = 0
     upper_sample_y = 0
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio.
     delta = 0.0
     lower_distance_y = 0.0
     upper_distance_y = 0.0
@@ -159,37 +168,89 @@ def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) 
                           int(tm.round(vTexCoord.x * SourceSize.x + (MAX_SPOT_SIZE / delta)))):
         lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
         upper_sample = texelFetch(img, tm.ivec2(sample_x, upper_sample_y))
-        # Find reciprocal of widths to save divisions later.
-        lower_width_rcp = 1.0 / (MAX_SPOT_SIZE * ((1.0 - MIN_SPOT_SIZE) * tm.sqrt(lower_sample) + MIN_SPOT_SIZE))
-        upper_width_rcp = 1.0 / (MAX_SPOT_SIZE * ((1.0 - MIN_SPOT_SIZE) * tm.sqrt(upper_sample) + MIN_SPOT_SIZE))
-        # Distance units are *scanlines heights*, so we have to adjust x
-        # distance with the aspect ratio.
         distance_x = delta * ((sample_x + 0.5) - vTexCoord.x * SourceSize.x)
-        lower_output = (lower_sample * lower_width_rcp * 0.25) * \
-            (1 + tm.cos(np.pi * tm.clamp(distance_x * lower_width_rcp, -1, 1))) * \
-            (1 + tm.cos(np.pi * tm.clamp(lower_distance_y * lower_width_rcp, -1, 1)))
-        upper_output = (upper_sample * upper_width_rcp * 0.25) * \
-            (1 + tm.cos(np.pi * tm.clamp(distance_x * upper_width_rcp, -1, 1))) * \
-            (1 + tm.cos(np.pi * tm.clamp(upper_distance_y * upper_width_rcp, -1, 1)))
-        output += lower_output + upper_output
+        output += spot3(lower_sample, distance_x, lower_distance_y)
+        output += spot3(upper_sample, distance_x, upper_distance_y)
     return delta * output
+
+
+@ti.func
+def spot1(sample, distance_x, distance_y):
+    width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
+    y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
+    return sample * width_rcp * ((0.5 * tm.cos(np.pi * x) + 0.5) * (0.5 * tm.cos(np.pi * y) + 0.5))
+
+
+@ti.func
+def spot2(sample, distance_x, distance_y):
+    width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x = tm.min(abs(distance_x) * width_rcp - 0.5, 0.5)
+    y = tm.min(abs(distance_y) * width_rcp - 0.5, 0.5)
+    return sample * width_rcp * ((2.0 * (x * abs(x) - x) + 0.5) * (2.0 * (y * abs(y) - y) + 0.5))
+
+
+@ti.func
+def spot3(sample, distance_x, distance_y):
+    width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
+    y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
+    return sample * width_rcp * (((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0))
+
+
+def box_blur(image_in, radius):
+    """Do several box blurs on the image, approximating a gaussian blur.
+
+    This is a very fast blur for large images. The speed is not
+    dependent on the radius."""
+    (in_height, in_width, in_planes) = image_in.shape
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_width, in_height))
+    for i in range(4):
+        taichi_box_blur(field_in, field_out, radius)
+        taichi_box_blur(field_out, field_in, radius)
+    return field_in.to_numpy()
+
+
+@ti.kernel
+def taichi_box_blur(field_in: ti.template(), field_out: ti.template(), radius: int):
+    """Do a 1D horizontal box blur on field_in, writing the transposed result to field_out"""
+    (in_height, in_width) = field_in.shape
+    width = 2 * radius + 1
+    for y in range(in_height):
+        running_sum = tm.vec3(0.0)
+        # TODO If radius or width is > in_width?
+        for x in range(radius):
+            running_sum += field_in[y, x]
+        for x in range(radius, width):
+            running_sum += field_in[y, x]
+            field_out[x - radius, y] = running_sum / width
+        for x in range(width, in_width):
+            running_sum += field_in[y, x]
+            running_sum -= field_in[y, x - width]
+            field_out[x - radius, y] = running_sum / width
+        for x in range(in_width, in_width + radius):
+            running_sum -= field_in[y, x - width]
+            field_out[x - radius, y] = running_sum / width
+    return
 
 
 USE_YIQ = False
 GAMMA = 2.4
 # -6dB cutoff is at 1 / 2L in cycles. We want CUTOFF * 53.33e-6 cycles (CUTOFF bandwidth and NTSC standard active line time of 53.33us).
 # CUTOFF = np.array([5.0e6, 0.6e6, 0.6e6])  # Hz
-CUTOFF = np.array([6.0e6, 6.0e6, 6.0e6])  # Hz
+CUTOFF = np.array([5.0e6, 5.0e6, 5.0e6])  # Hz
 # L = 1 / (CUTOFF * 53.33e-6 * 2)
 Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
-OUTPUT_RESOLUTION = (2160, 2880)  #(8640, 11520) #(1080, 1440, 3))
-MAX_SPOT_SIZE= 0.6
-MIN_SPOT_SIZE= 0.5
+OUTPUT_RESOLUTION = (2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520)
+MAX_SPOT_SIZE= 1.0
+MIN_SPOT_SIZE= 0.6
 MASK_AMOUNT = 0.0
-BLUR_SIGMA = 75
-BLUR_AMOUNT = 0.075
-SAMPLES = 1400  # 907
+BLUR_SIGMA = 0.03
+BLUR_AMOUNT = 0.13
+SAMPLES = 907  #1400
 INTERLACING = True
 INTERLACING_EVEN = False
 
@@ -210,7 +271,9 @@ def main():
     if USE_YIQ:
         img_crt_gamma = srgb_to_yiq(img_original, GAMMA)
     else:
-        img_crt_gamma = srgb_to_gamma(img_original, GAMMA)
+        #img_crt_gamma = srgb_to_gamma(img_original, GAMMA)
+        #img_crt_gamma = gamma_to_gamma(img_original.astype(np.float32) / 255, 2.2, GAMMA)
+        img_crt_gamma = img_original.astype(np.float32) / 255
 
     # Horizontal low pass filter
     print('Low pass filtering...')
@@ -244,11 +307,16 @@ def main():
     img_spot = spot_fragment(img_filtered_linear, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
 
     # Mask
-    # print('Masking...')
+    print('Masking...')
     # mask_resized = imread('mask_slot_distort.png').astype(np.float32) / 65535.0  # 255.0
     # mask_resized = mask_resized / np.max(mask_resized)
     # img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized[:, :, 0:3] * MASK_AMOUNT)
-    img_masked = img_spot
+
+    mask = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    mask_resized = np.broadcast_to(mask[np.arange(OUTPUT_RESOLUTION[1]) % mask.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
+    img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized * MASK_AMOUNT)
+
+    #img_masked = img_spot
 
     # mask_tile = imread('mask.png').astype(np.float32) / 255.0
     # mask = np.tile(mask_tile, ((2 * 250 * 3 // 4), 250, 1))
@@ -268,17 +336,18 @@ def main():
     # img_masked = mask_resized * img_spot
 
     # Diffusion
-    # print('Blurring...')
-    # blurred = skimage.filters.gaussian(img_masked, sigma=BLUR_SIGMA, mode='constant', preserve_range=True, channel_axis=-1)
-    # imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
-    # img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
-    img_diffused = img_masked
+    print('Blurring...')
+    sigma = BLUR_SIGMA * OUTPUT_RESOLUTION[1]
+    box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
+    blurred = box_blur(img_masked, box_radius)
+    # blurred = skimage.filters.gaussian(img_masked, sigma=sigma, mode='constant', preserve_range=True, channel_axis=-1)
+    #imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
+    img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
+    #img_diffused = img_masked
 
     # To sRGB
+    print('Color transform and save...')
     img_final_srgb = linear_to_srgb(img_diffused)
-
-    #DEBUG
-    imwrite('overexposed.png', img_final_srgb - np.clip(img_final_srgb, 0, 255))
 
     imwrite(args.output, img_final_srgb)
 

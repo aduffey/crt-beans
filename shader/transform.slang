@@ -1,12 +1,10 @@
 #version 450
 
-layout(set = 0, binding = 0, std140) uniform UBO
-{
+layout(set = 0, binding = 0, std140) uniform UBO {
     mat4 MVP;
 };
 
-layout(push_constant) uniform Push
-{
+layout(push_constant) uniform Push {
     vec4 SourceSize;
     float YIQ;
 } params;
@@ -18,10 +16,10 @@ layout(push_constant) uniform Push
 layout(location = 0) in vec4 Position;
 layout(location = 1) in vec2 TexCoord;
 layout(location = 0) out vec2 vTexCoord;
-void main()
-{
-   gl_Position = MVP * Position;
-   vTexCoord = TexCoord;
+
+void main() {
+    gl_Position = MVP * Position;
+    vTexCoord = TexCoord;
 }
 
 #pragma stage fragment
@@ -44,8 +42,7 @@ vec3 srgb_to_yiq(vec3 srgb) {
     return GAMMA_YIQ_MAT * srgb_to_gamma(srgb);
 }
 
-void main()
-{
+void main() {
     ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
     vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
     if (params.YIQ > 0.5) {
