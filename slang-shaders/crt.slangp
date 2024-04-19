@@ -1,12 +1,12 @@
 shaders = 3
 
-shader0 = transform.slang
+shader0 = shaders/transform.slang
 mipmap_input0 = false
 scale_type0 = source
 scale0 = 1.0
 float_framebuffer0 = true
 
-shader1 = filter.slang
+shader1 = shaders/filter.slang
 mipmap_input1 = false
 scale_type_x1 = absolute
 scale_x1 = 907
@@ -14,7 +14,7 @@ scale_type_y1 = source
 scale_y1 = 1.0
 float_framebuffer1 = true
 
-shader2 = spot.slang
+shader2 = shaders/spot.slang
 filter_linear2 = false
 wrap_mode2 = clamp_to_border
 mipmap_input2 = false
