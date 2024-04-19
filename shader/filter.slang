@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
-#pragma parameter YIQ "Composite" 0.0 0.0 1.0 1.0
+#pragma parameter YIQ "Composite (0: RGB, 1: YIQ/composite)" 0.0 0.0 1.0 1.0
 #pragma parameter Cutoff "RGB/Y bandwidth (MHz)" 5.0 0.6 6.0 0.2
 #pragma parameter ICutoff "I bandwidth (MHz)" 0.6 0.6 6.0 0.2
 #pragma parameter QCutoff "Q bandwidth (MHz)" 0.6 0.6 6.0 0.2
@@ -50,20 +50,23 @@ vec3 yiq_to_linear(vec3 rgb) {
 }
 
 void main() {
-    const vec3 L = params.YIQ > 0.5 ?
+    vec3 L = params.YIQ > 0.5 ?
         1.0 / (vec3(params.Cutoff, params.ICutoff, params.QCutoff) * 53.33 * 2.0) :
         1.0 / (vec3(params.Cutoff) * 53.33 * 2.0);
-    const float L_max = max(L.r, max(L.g, L.b));
-    const vec3 L_rcp = 1.0 / L;
+    float L_max = max(L.r, max(L.g, L.b));
+    vec3 L_rcp = 1.0 / L;
 
     vec3 filtered = vec3(0.0);
     int pix_y = int(floor(vTexCoord.y * params.SourceSize.y));
     float t = vTexCoord.x;
-    for (int pix_x = int(floor(params.SourceSize.x * (vTexCoord.x - L_max)));
-             pix_x <= int(floor(params.SourceSize.x * (vTexCoord.x + L_max)));
+    // Bound the start and end pixel so we don't fetch outside our texture
+    // (which is undefined behavior). There's no need to fetch there anyway,
+    // it would just be zeros.
+    for (int pix_x = max(int(floor(params.SourceSize.x * (vTexCoord.x - L_max))), 0);
+             pix_x <= min(int(floor(params.SourceSize.x * (vTexCoord.x + L_max))), int(params.SourceSize.x) - 1);
              pix_x++) {
         vec3 s = texelFetch(Source, ivec2(pix_x, pix_y), 0).rgb;
-        vec3 t0 = vec3(pix_x * params.SourceSize.z);
+        vec3 t0 = vec3(float(pix_x) * params.SourceSize.z);
         vec3 t1 = t0 + vec3(params.SourceSize.z);
         t0 = clamp(t0, t - L, t + L);
         t1 = clamp(t1, t - L, t + L);

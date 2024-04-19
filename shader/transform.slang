@@ -7,10 +7,12 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 layout(push_constant) uniform Push {
     vec4 SourceSize;
     float YIQ;
+    float InputSpace;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
-#pragma parameter YIQ "Composite" 0.0 0.0 1.0 1.0
+#pragma parameter InputSpace "Input (0: System gamma, 1: 2.2 gamma, 2: sRGB)" 0.0 0.0 2.0 1.0
+#pragma parameter YIQ "Composite (0: RGB, 1: YIQ/composite)" 0.0 0.0 1.0 1.0
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -38,6 +40,10 @@ vec3 srgb_to_gamma(vec3 srgb) {
     return pow(mix(higher, lower, cutoff), vec3(1.0 / CRT_GAMMA));
 }
 
+vec3 gamma22_to_gamma(vec3 rgb) {
+    return pow(rgb, vec3(2.2 / CRT_GAMMA));
+}
+
 vec3 srgb_to_yiq(vec3 srgb) {
     return GAMMA_YIQ_MAT * srgb_to_gamma(srgb);
 }
@@ -45,9 +51,18 @@ vec3 srgb_to_yiq(vec3 srgb) {
 void main() {
     ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
     vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
+
+    // First convert to CRT gamma if necessary.
+    if (params.InputSpace == 1.0) {
+        rgb = gamma22_to_gamma(rgb);
+    } else if (params.InputSpace == 2.0) {
+        rgb = srgb_to_gamma(rgb);
+    } // else if 0.0, no conversion
+
+    // Then convert to YIQ if necessary.
     if (params.YIQ > 0.5) {
-        FragColor = vec4(srgb_to_yiq(rgb), 1.0);
-    } else {
-        FragColor = vec4(srgb_to_gamma(rgb), 1.0);
+        rgb = srgb_to_yiq(rgb);
     }
+
+    FragColor = vec4(rgb, 1.0);
 }

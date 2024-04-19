@@ -69,6 +69,23 @@ def texelFetch(Source, vTexCoords: tm.ivec2) -> tm.vec3:
     return val
 
 
+@ti.func
+def texture(Source, vTexCoords: tm.vec2) -> tm.vec3:
+    """Sample from Source at (x, y) using bilinear interpolation.
+
+    Outside of the Source is considered to be 0.
+    """
+    lookup_coords = vTexCoords.x * Source.shape
+    coords = tm.round(lookup_coords, tm.ivec2)
+    v11 = texelFetch(Source, coords)
+    v01 = texelFetch(Source, coords - ivec2(1, 0))
+    v10 = texelFetch(Source, coords - ivec2(0, 1))
+    v00 = texelFetch(Source, coords - ivec2(1, 1))
+    row1 = tm.mix(v10, v11, lookup_coords.y - coords.y + 0.5)
+    row0 = tm.mix(v01, v00, lookup_coords.y - coords.y + 0.5)
+    return tm.mix(row0, row1, lookup_coords.x - coords.x + 0.5)
+
+
 def filter_fragment(image_in, output_dim):
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
@@ -135,42 +152,40 @@ def taichi_spot_fragment(field_in: ti.template(), field_out: ti.template()):
 
 @ti.func
 def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
-    aspect_ratio = OutputSize.x / OutputSize.y
-
-    lower_sample_y = 0
     upper_sample_y = 0
+    lower_sample_y = 0
     # Distance units (including for delta) are *scanlines heights*. This means
     # we need to adjust x distances by the aspect ratio.
     delta = 0.0
-    lower_distance_y = 0.0
     upper_distance_y = 0.0
+    lower_distance_y = 0.0
     # Check if we should be deinterlacing.
     # if INTERLACING and SourceSize.y > 300:
     #     if INTERLACING_EVEN:
-    #         lower_sample_y = int(tm.ceil(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2 - 2
     #         upper_sample_y = int(tm.ceil(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2
+    #         lower_sample_y = upper_sample_y - 2
     #     else:
-    #         lower_sample_y = int(tm.floor(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2 - 1
     #         upper_sample_y = int(tm.floor(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2 + 1
+    #         lower_sample_y = upper_sample_y - 2
     #     # TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
-    #     delta = 0.5 * aspect_ratio * SourceSize.y * SourceSize.z
-    #     lower_distance_y = 0.5 * ((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
+    #     delta = 0.5 * OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
     #     upper_distance_y = 0.5 * ((upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
+    #     lower_distance_y = 0.5 * ((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
     # else:
-    lower_sample_y = int(tm.round(vTexCoord.y * SourceSize.y)) - 1
     upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
-    delta = aspect_ratio * SourceSize.y * SourceSize.z
-    lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    lower_sample_y = upper_sample_y - 1
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
     upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
 
     output = tm.vec3(0.0)
     for sample_x in range(int(tm.round(vTexCoord.x * SourceSize.x - (MAX_SPOT_SIZE / delta))),
                           int(tm.round(vTexCoord.x * SourceSize.x + (MAX_SPOT_SIZE / delta)))):
-        lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
         upper_sample = texelFetch(img, tm.ivec2(sample_x, upper_sample_y))
+        lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
         distance_x = delta * ((sample_x + 0.5) - vTexCoord.x * SourceSize.x)
-        output += spot3(lower_sample, distance_x, lower_distance_y)
         output += spot3(upper_sample, distance_x, upper_distance_y)
+        output += spot3(lower_sample, distance_x, lower_distance_y)
     return delta * output
 
 
@@ -179,7 +194,7 @@ def spot1(sample, distance_x, distance_y):
     width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
     y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
-    return sample * width_rcp * ((0.5 * tm.cos(np.pi * x) + 0.5) * (0.5 * tm.cos(np.pi * y) + 0.5))
+    return sample * width_rcp * (0.5 * tm.cos(np.pi * x) + 0.5) * (0.5 * tm.cos(np.pi * y) + 0.5)
 
 
 @ti.func
@@ -187,7 +202,7 @@ def spot2(sample, distance_x, distance_y):
     width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.min(abs(distance_x) * width_rcp - 0.5, 0.5)
     y = tm.min(abs(distance_y) * width_rcp - 0.5, 0.5)
-    return sample * width_rcp * ((2.0 * (x * abs(x) - x) + 0.5) * (2.0 * (y * abs(y) - y) + 0.5))
+    return sample * width_rcp * (2.0 * (x * abs(x) - x) + 0.5) * (2.0 * (y * abs(y) - y) + 0.5)
 
 
 @ti.func
@@ -195,7 +210,59 @@ def spot3(sample, distance_x, distance_y):
     width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
     y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
-    return sample * width_rcp * (((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0))
+    return sample * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0)
+
+
+f16vec3 = ti.types.vector(3, ti.f16)
+
+
+@ti.func
+def spot_sim_f16(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
+    upper_sample_y = 0
+    lower_sample_y = 0
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio.
+    delta = 0.0
+    upper_distance_y = 0.0
+    lower_distance_y = 0.0
+    # Check if we should be deinterlacing.
+    # if INTERLACING and SourceSize.y > 300:
+    #     if INTERLACING_EVEN:
+    #         upper_sample_y = int(tm.ceil(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2
+    #         lower_sample_y = upper_sample_y - 2
+    #     else:
+    #         upper_sample_y = int(tm.floor(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2 + 1
+    #         lower_sample_y = upper_sample_y - 2
+    #     # TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
+    #     delta = 0.5 * OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
+    #     upper_distance_y = 0.5 * ((upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
+    #     lower_distance_y = 0.5 * ((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
+    # else:
+    upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
+    lower_sample_y = upper_sample_y - 1
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
+    upper_distance_y = ti.f16((upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
+    lower_distance_y = ti.f16((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
+
+    output = tm.vec3(0.0)
+    for sample_x in range(int(tm.round(vTexCoord.x * SourceSize.x - (MAX_SPOT_SIZE / delta))),
+                          int(tm.round(vTexCoord.x * SourceSize.x + (MAX_SPOT_SIZE / delta)))):
+        upper_sample = f16vec3(texelFetch(img, tm.ivec2(sample_x, upper_sample_y)))
+        lower_sample = f16vec3(texelFetch(img, tm.ivec2(sample_x, lower_sample_y)))
+        distance_x = ti.f16(delta * ((sample_x + 0.5) - vTexCoord.x * SourceSize.x))
+        output += spot3(upper_sample, distance_x, upper_distance_y)
+        output += spot3(lower_sample, distance_x, lower_distance_y)
+    return delta * output
+
+
+@ti.func
+def spot3_float16(sample: f16vec3, distance_x: f16vec3, distance_y: f16vec3) -> f16vec3:
+    width_rcp = ti.f16(1.0) / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x = tm.clamp(abs(distance_x) * width_rcp, ti.f16(0.0), ti.f16(1.0))
+    y = tm.clamp(abs(distance_y) * width_rcp, ti.f16(0.0), ti.f16(1.0))
+    return sample * width_rcp * \
+            ((x * x) * (ti.f16(2.0) * x - ti.f16(3.0)) + ti.f16(1.0)) * \
+            ((y * y) * (ti.f16(2.0) * y - ti.f16(3.0)) + ti.f16(1.0))
 
 
 def box_blur(image_in, radius):
@@ -236,21 +303,56 @@ def taichi_box_blur(field_in: ti.template(), field_out: ti.template(), radius: i
     return
 
 
+def dual_gaussian_blur(image_in, sigma):
+    (in_height, in_width, in_planes) = image_in.shape
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_width, in_height))
+    for i in range(4):
+        taichi_box_blur(field_in, field_out, radius)
+        taichi_box_blur(field_out, field_in, radius)
+    return field_in.to_numpy()
+
+
+@ti.kernel
+def dg_blur_down_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = dg_blur_down(vTexCoord, field_in, SourceSize, OutputSize)
+    return
+
+
+@ti.kernel
+def dg_blur_up_fragment(field_in: ti.template(), field_out: ti.template(), sigma: float):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = dg_blur_up(vTexCoord, field_in, SourceSize, OutputSize, sigma)
+    return
+
+
 USE_YIQ = False
 GAMMA = 2.4
 # -6dB cutoff is at 1 / 2L in cycles. We want CUTOFF * 53.33e-6 cycles (CUTOFF bandwidth and NTSC standard active line time of 53.33us).
 # CUTOFF = np.array([5.0e6, 0.6e6, 0.6e6])  # Hz
-CUTOFF = np.array([5.0e6, 5.0e6, 5.0e6])  # Hz
+CUTOFF = np.array([6.0e6, 6.0e6, 6.0e6])  # Hz
 # L = 1 / (CUTOFF * 53.33e-6 * 2)
 Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
 OUTPUT_RESOLUTION = (2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520)
-MAX_SPOT_SIZE= 1.0
+MAX_SPOT_SIZE= 0.8
 MIN_SPOT_SIZE= 0.6
 MASK_AMOUNT = 0.0
 BLUR_SIGMA = 0.03
-BLUR_AMOUNT = 0.13
-SAMPLES = 907  #1400
+BLUR_AMOUNT = 0.0  #0.13
+SAMPLES = 2880  #907  #1400
 INTERLACING = True
 INTERLACING_EVEN = False
 
@@ -278,6 +380,7 @@ def main():
     # Horizontal low pass filter
     print('Low pass filtering...')
     img_filtered = filter_fragment(img_crt_gamma, (image_height, SAMPLES, 3))
+    imwrite('filtered.png', linear_to_srgb(img_filtered))  # DEBUG
 
     # DEBUG -- Write Y, I, and Q planes to separate images
     # y_mask = np.array([True, False, False])

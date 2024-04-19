@@ -13,9 +13,9 @@ layout(push_constant) uniform Push {
     float OddFieldFirst;
 } params;
 
-#pragma parameter MaxSpotSize "Maximum spot size" 1.0 0.6 1.0 0.05
-#pragma parameter MinSpotSize "Minimum spot size" 0.5 0.3 1.0 0.1
-#pragma parameter OddFieldFirst "Interlacing - display odd field first" 0.0 0.0 1.0 1.0
+#pragma parameter MaxSpotSize "Maximum spot size (proportion of scanline)" 1.0 0.6 1.0 0.05
+#pragma parameter MinSpotSize "Minimum spot size (proportion of maximum)" 0.5 0.3 1.0 0.1
+#pragma parameter OddFieldFirst "Interlacing (phase)" 0.0 0.0 1.0 1.0
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -48,47 +48,52 @@ vec3 spot(vec3 sample_value, float distance_x, float distance_y) {
     vec3 width_rcp = 1.0 / mix(vec3(params.MinSpotSize), vec3(params.MaxSpotSize), sqrt(sample_value));
     vec3 x = clamp(abs(distance_x) * width_rcp, 0.0, 1.0);
     vec3 y = clamp(abs(distance_y) * width_rcp, 0.0, 1.0);
-    return sample_value * width_rcp * ((x * x * (2.0 * x - 3.0) + 1.0) * (y * y * (2.0 * y - 3.0) + 1.0));
+    return sample_value * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0);
 }
 
 void main() {
-    float aspect_ratio = params.OutputSize.x / params.OutputSize.y;
-
-    int lower_sample_y, upper_sample_y;
+    // Sample locations in Source texel space: [0, SourceSize.y), snapped to the
+    // middle of a texel.
+    float upper_sample_y, lower_sample_y;
     // Distance units are *scanlines heights*. delta is the distance
     // between samples on the x-axis, and has to be adjusted by the
     // aspect ratio.
-    float delta, lower_distance_y, upper_distance_y;
-    // Check if we should be interlacing.
-    if (params.SourceSize.y > 300.0) {
+    float delta, upper_distance_y;
+    // Check if we should be interlacing. If we are, grab two closest even or
+    // odd lines. If we aren't, just grab the two closest lines.
+    if (params.SourceSize.y > 300.0) {  // Interlacing
         if ((params.FrameCount + (params.OddFieldFirst > 0.5 ? 1u : 0u)) % 2u == 0u) {
-            lower_sample_y = int(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2 - 2;
-            upper_sample_y = int(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2;
+            // TODO check these
+            upper_sample_y = floor(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2.0 + 0.5;
         } else {
-            lower_sample_y = int(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2 - 1;
-            upper_sample_y = int(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2 + 1;
+            upper_sample_y = floor(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2.0 + 1.5;
         }
+        lower_sample_y = upper_sample_y - 2.0;
         // TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
-        delta = 0.5 * aspect_ratio * params.SourceSize.y * params.SourceSize.z;
-        lower_distance_y = 0.5 * ((float(lower_sample_y) + 0.5) - vTexCoord.y * params.SourceSize.y);
-        upper_distance_y = 0.5 * ((float(upper_sample_y) + 0.5) - vTexCoord.y * params.SourceSize.y);
-    } else {
-        lower_sample_y = int(round(vTexCoord.y * params.SourceSize.y)) - 1;
-        upper_sample_y = int(round(vTexCoord.y * params.SourceSize.y));
-        delta = aspect_ratio * params.SourceSize.y * params.SourceSize.z;
-        lower_distance_y = (float(lower_sample_y) + 0.5) - vTexCoord.y * params.SourceSize.y;
-        upper_distance_y = (float(upper_sample_y) + 0.5) - vTexCoord.y * params.SourceSize.y;
+        delta = 0.5 * params.OutputSize.x * params.OutputSize.w * params.SourceSize.y * params.SourceSize.z;
+        upper_distance_y = 0.5 * (upper_sample_y - vTexCoord.y * params.SourceSize.y);
+    } else {  // No interlacing
+        upper_sample_y = round(vTexCoord.y * params.SourceSize.y) + 0.5;
+        lower_sample_y = upper_sample_y - 1.0;
+        delta = params.OutputSize.x * params.OutputSize.w * params.SourceSize.y * params.SourceSize.z;
+        upper_distance_y = upper_sample_y - vTexCoord.y * params.SourceSize.y;
     }
+    float lower_distance_y = upper_distance_y - 1.0;
+
+    // Transform *_sample_y into [0,1] coordinate space. We need them for the
+    // texture sampling below.
+    upper_sample_y *= params.SourceSize.w;
+    lower_sample_y *= params.SourceSize.w;
 
     vec3 value = vec3(0.0);
-    for (int sample_x = int(round(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)));
-             sample_x < int(round(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta)));
-             sample_x++) {
-        vec3 lower_sample = texelFetch(Source, ivec2(sample_x, lower_sample_y), 0).rgb;
-        vec3 upper_sample = texelFetch(Source, ivec2(sample_x, upper_sample_y), 0).rgb;
-        float distance_x = delta * ((float(sample_x) + 0.5) - vTexCoord.x * params.SourceSize.x);
-        value += spot(lower_sample, distance_x, lower_distance_y);
+    for (float sample_x = params.SourceSize.z * (round(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
+               sample_x < params.SourceSize.z * round(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta));
+               sample_x += params.SourceSize.z) {
+        vec3 upper_sample = texture(Source, vec2(sample_x, upper_sample_y)).rgb;
+        vec3 lower_sample = texture(Source, vec2(sample_x, lower_sample_y)).rgb;
+        float distance_x = delta * params.SourceSize.x * (sample_x - vTexCoord.x);
         value += spot(upper_sample, distance_x, upper_distance_y);
+        value += spot(lower_sample, distance_x, lower_distance_y);
     }
     FragColor = vec4(linear_to_srgb(delta * value), 1.0);
 }
