@@ -63,7 +63,6 @@ void main() {
     // odd lines. If we aren't, just grab the two closest lines.
     if (params.SourceSize.y > 300.0) {  // Interlacing
         if ((params.FrameCount + (params.OddFieldFirst > 0.5 ? 1u : 0u)) % 2u == 0u) {
-            // TODO check these
             upper_sample_y = floor(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2.0 + 0.5;
         } else {
             upper_sample_y = floor(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2.0 + 1.5;
