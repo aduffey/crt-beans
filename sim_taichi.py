@@ -191,7 +191,7 @@ def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) 
 
 @ti.func
 def spot1(sample, distance_x, distance_y):
-    width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    width_rcp = 1.0 / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
     y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
     return sample * width_rcp * (0.5 * tm.cos(np.pi * x) + 0.5) * (0.5 * tm.cos(np.pi * y) + 0.5)
@@ -199,7 +199,7 @@ def spot1(sample, distance_x, distance_y):
 
 @ti.func
 def spot2(sample, distance_x, distance_y):
-    width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    width_rcp = 1.0 / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.min(abs(distance_x) * width_rcp - 0.5, 0.5)
     y = tm.min(abs(distance_y) * width_rcp - 0.5, 0.5)
     return sample * width_rcp * (2.0 * (x * abs(x) - x) + 0.5) * (2.0 * (y * abs(y) - y) + 0.5)
@@ -207,7 +207,7 @@ def spot2(sample, distance_x, distance_y):
 
 @ti.func
 def spot3(sample, distance_x, distance_y):
-    width_rcp = 1.0 / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    width_rcp = 1.0 / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
     y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
     return sample * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0)
@@ -257,7 +257,7 @@ def spot_sim_f16(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.ve
 
 @ti.func
 def spot3_float16(sample: f16vec3, distance_x: f16vec3, distance_y: f16vec3) -> f16vec3:
-    width_rcp = ti.f16(1.0) / tm.mix(MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    width_rcp = ti.f16(1.0) / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, ti.f16(0.0), ti.f16(1.0))
     y = tm.clamp(abs(distance_y) * width_rcp, ti.f16(0.0), ti.f16(1.0))
     return sample * width_rcp * \

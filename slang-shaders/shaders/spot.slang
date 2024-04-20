@@ -45,7 +45,7 @@ vec3 linear_to_srgb(vec3 rgb) {
 }
 
 vec3 spot(vec3 sample_value, float distance_x, float distance_y) {
-    vec3 width_rcp = 1.0 / mix(vec3(params.MinSpotSize), vec3(params.MaxSpotSize), sqrt(sample_value));
+    vec3 width_rcp = 1.0 / mix(vec3(params.MaxSpotSize * params.MinSpotSize), vec3(params.MaxSpotSize), sqrt(sample_value));
     vec3 x = clamp(abs(distance_x) * width_rcp, 0.0, 1.0);
     vec3 y = clamp(abs(distance_y) * width_rcp, 0.0, 1.0);
     return sample_value * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0);
