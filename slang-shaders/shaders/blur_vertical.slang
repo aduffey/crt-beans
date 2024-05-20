@@ -36,7 +36,7 @@ layout(binding = 1) uniform sampler2D Source;
  *   the exponential function each time.
  *   See: https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-40-incremental-computation-gaussian
  * - Relying on the output texture being the same size as the input texture
- *   and the symmetry of tha gaussian distribution, to sample from the middle
+ *   and the symmetry of the gaussian distribution, to sample from the middle
  *   out which saves some ALU.
  */
 void main() {
