@@ -152,29 +152,15 @@ def taichi_spot_fragment(field_in: ti.template(), field_out: ti.template()):
 
 @ti.func
 def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
-    upper_sample_y = 0
-    lower_sample_y = 0
+    # Overscan
+    vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
+
     # Distance units (including for delta) are *scanlines heights*. This means
-    # we need to adjust x distances by the aspect ratio.
-    delta = 0.0
-    upper_distance_y = 0.0
-    lower_distance_y = 0.0
-    # Check if we should be deinterlacing.
-    # if INTERLACING and SourceSize.y > 300:
-    #     if INTERLACING_EVEN:
-    #         upper_sample_y = int(tm.ceil(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2
-    #         lower_sample_y = upper_sample_y - 2
-    #     else:
-    #         upper_sample_y = int(tm.floor(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2 + 1
-    #         lower_sample_y = upper_sample_y - 2
-    #     # TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
-    #     delta = 0.5 * OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
-    #     upper_distance_y = 0.5 * ((upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
-    #     lower_distance_y = 0.5 * ((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
-    # else:
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
     upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
     lower_sample_y = upper_sample_y - 1
-    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
     upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y
     lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
 
@@ -218,29 +204,16 @@ f16vec3 = ti.types.vector(3, ti.f16)
 
 @ti.func
 def spot_sim_f16(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
-    upper_sample_y = 0
-    lower_sample_y = 0
+    # Overscan
+    vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
+
     # Distance units (including for delta) are *scanlines heights*. This means
-    # we need to adjust x distances by the aspect ratio.
-    delta = 0.0
-    upper_distance_y = 0.0
-    lower_distance_y = 0.0
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
     # Check if we should be deinterlacing.
-    # if INTERLACING and SourceSize.y > 300:
-    #     if INTERLACING_EVEN:
-    #         upper_sample_y = int(tm.ceil(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2
-    #         lower_sample_y = upper_sample_y - 2
-    #     else:
-    #         upper_sample_y = int(tm.floor(vTexCoord.y * SourceSize.y + 0.5) * 0.5) * 2 + 1
-    #         lower_sample_y = upper_sample_y - 2
-    #     # TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
-    #     delta = 0.5 * OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
-    #     upper_distance_y = 0.5 * ((upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
-    #     lower_distance_y = 0.5 * ((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
-    # else:
     upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
     lower_sample_y = upper_sample_y - 1
-    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
     upper_distance_y = ti.f16((upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
     lower_distance_y = ti.f16((lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y)
 
@@ -250,8 +223,8 @@ def spot_sim_f16(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.ve
         upper_sample = f16vec3(texelFetch(img, tm.ivec2(sample_x, upper_sample_y)))
         lower_sample = f16vec3(texelFetch(img, tm.ivec2(sample_x, lower_sample_y)))
         distance_x = ti.f16(delta * ((sample_x + 0.5) - vTexCoord.x * SourceSize.x))
-        output += spot3(upper_sample, distance_x, upper_distance_y)
-        output += spot3(lower_sample, distance_x, lower_distance_y)
+        output += spot3_float16(upper_sample, distance_x, upper_distance_y)
+        output += spot3_float16(lower_sample, distance_x, lower_distance_y)
     return delta * output
 
 
@@ -303,58 +276,61 @@ def taichi_box_blur(field_in: ti.template(), field_out: ti.template(), radius: i
     return
 
 
-def dual_gaussian_blur(image_in, sigma):
+def gaussian_blur(image_in, sigma):
     (in_height, in_width, in_planes) = image_in.shape
     field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
     field_in.from_numpy(image_in)
     field_out = ti.Vector.field(n=3, dtype=float, shape=(in_width, in_height))
-    for i in range(4):
-        taichi_box_blur(field_in, field_out, radius)
-        taichi_box_blur(field_out, field_in, radius)
+    gaussian_fragment(field_in, field_out, sigma)
+    gaussian_fragment(field_out, field_in, sigma)
     return field_in.to_numpy()
 
 
 @ti.kernel
-def dg_blur_down_fragment(field_in: ti.template(), field_out: ti.template()):
+def gaussian_fragment(field_in: ti.template(), field_out: ti.template(), sigma: float):
     (in_height, in_width) = field_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
         vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
-        field_out[y, x] = dg_blur_down(vTexCoord, field_in, SourceSize, OutputSize)
+        field_out[y, x] = gaussian_taichi(vTexCoord, field_in, SourceSize, OutputSize, sigma)
     return
 
 
-@ti.kernel
-def dg_blur_up_fragment(field_in: ti.template(), field_out: ti.template(), sigma: float):
-    (in_height, in_width) = field_in.shape
-    (out_height, out_width) = field_out.shape
-    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
-    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
-    for y, x in field_out:
-        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
-        field_out[y, x] = dg_blur_up(vTexCoord, field_in, SourceSize, OutputSize, sigma)
-    return
+@ti.func
+def gaussian_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4, sigma: float) -> tm.vec3:
+    pos = vTexCoord.yx * SourceSize.xy
+    weight_sum = 0.0
+    value = tm.vec3(0.0)
+    center = tm.ivec2(int(tm.round(pos.x)), int(tm.floor(pos.y)))
+    for x in range(center.x - int(tm.ceil(4 * sigma)), center.x + int(tm.ceil(4 * sigma)) + 1):
+        distance_x = pos.x - x - 0.5
+        weight = tm.exp(-(distance_x * distance_x) / (2 * sigma * sigma))
+        weight_sum += weight
+        value += weight * texelFetch(Source, tm.ivec2(x, center.y))
+    return value / weight_sum
 
 
 USE_YIQ = False
 GAMMA = 2.4
 # -6dB cutoff is at 1 / 2L in cycles. We want CUTOFF * 53.33e-6 cycles (CUTOFF bandwidth and NTSC standard active line time of 53.33us).
 # CUTOFF = np.array([5.0e6, 0.6e6, 0.6e6])  # Hz
-CUTOFF = np.array([6.0e6, 6.0e6, 6.0e6])  # Hz
+CUTOFF = np.array([2.6e6, 2.6e6, 2.6e6])  # Hz
 # L = 1 / (CUTOFF * 53.33e-6 * 2)
 Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
-OUTPUT_RESOLUTION = (2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520)
-MAX_SPOT_SIZE= 0.8
-MIN_SPOT_SIZE= 0.6
+OUTPUT_RESOLUTION = (2160, 2880)  #(2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520)
+MAX_SPOT_SIZE= 0.95
+MIN_SPOT_SIZE= 0.5
 MASK_AMOUNT = 0.0
-BLUR_SIGMA = 0.03
-BLUR_AMOUNT = 0.0  #0.13
-SAMPLES = 2880  #907  #1400
+BLUR_SIGMA = 0.04
+BLUR_AMOUNT = 0.15  #0.13
+SAMPLES = 9000 #2880  #907  #1400
 INTERLACING = True
 INTERLACING_EVEN = False
+OVERSCAN_HORIZONTAL = 0.05
+OVERSCAN_VERTICAL = 0.05
 
 
 def main():
@@ -411,15 +387,15 @@ def main():
 
     # Mask
     print('Masking...')
-    # mask_resized = imread('mask_slot_distort.png').astype(np.float32) / 65535.0  # 255.0
-    # mask_resized = mask_resized / np.max(mask_resized)
-    # img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized[:, :, 0:3] * MASK_AMOUNT)
+    #mask_resized = imread('mask_slot_distort.png').astype(np.float32) / 255.0  # 65535.0
+    #mask_resized = mask_resized / np.max(mask_resized)
+    #img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized[:, :, 0:3] * MASK_AMOUNT)
 
-    mask = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    mask_resized = np.broadcast_to(mask[np.arange(OUTPUT_RESOLUTION[1]) % mask.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
-    img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized * MASK_AMOUNT)
+    # mask = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    # mask_resized = np.broadcast_to(mask[np.arange(OUTPUT_RESOLUTION[1]) % mask.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
+    # img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized * MASK_AMOUNT)
 
-    #img_masked = img_spot
+    img_masked = img_spot
 
     # mask_tile = imread('mask.png').astype(np.float32) / 255.0
     # mask = np.tile(mask_tile, ((2 * 250 * 3 // 4), 250, 1))
@@ -440,10 +416,11 @@ def main():
 
     # Diffusion
     print('Blurring...')
-    sigma = BLUR_SIGMA * OUTPUT_RESOLUTION[1]
-    box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
-    blurred = box_blur(img_masked, box_radius)
+    sigma = BLUR_SIGMA * OUTPUT_RESOLUTION[0]
+    # box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
+    # blurred = box_blur(img_masked, box_radius)
     # blurred = skimage.filters.gaussian(img_masked, sigma=sigma, mode='constant', preserve_range=True, channel_axis=-1)
+    blurred = gaussian_blur(img_masked, sigma=sigma)
     #imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
     img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
     #img_diffused = img_masked
