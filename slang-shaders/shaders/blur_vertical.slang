@@ -11,7 +11,7 @@ layout(push_constant) uniform Push {
 
 #pragma format R16G16B16A16_SFLOAT
 
-#pragma parameter GlowSigma "Glow width (proportion of screen height)" 0.04 0.01 0.05 0.01
+#include "parameters.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;

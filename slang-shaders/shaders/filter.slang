@@ -13,10 +13,8 @@ layout(push_constant) uniform Push {
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
-#pragma parameter YIQ "Composite (0: RGB, 1: YIQ/composite)" 0.0 0.0 1.0 1.0
-#pragma parameter Cutoff "RGB/Y bandwidth (MHz)" 5.0 0.6 6.0 0.2
-#pragma parameter ICutoff "I bandwidth (MHz)" 0.6 0.6 6.0 0.2
-#pragma parameter QCutoff "Q bandwidth (MHz)" 0.6 0.6 6.0 0.2
+
+#include "parameters.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;

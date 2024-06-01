@@ -11,7 +11,7 @@ layout(push_constant) uniform Push {
     float GlowAmount;
 } params;
 
-#pragma parameter GlowAmount "Glow amount (mix ratio)" 0.15 0.0 1.0 0.05
+#include "parameters.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -30,10 +30,11 @@ layout(binding = 1) uniform sampler2D Source;
 layout(binding = 2) uniform sampler2D Scanlines;
 
 vec3 linear_to_srgb(vec3 rgb) {
-    bvec3 cutoff = lessThan(rgb, vec3(0.0031308));
     // Floating point inaccuracies could result in negative values, so we'll
     // clamp here to avoid NaNs.
-    vec3 higher = vec3(1.055) * pow(clamp(rgb, 0.0, 1.0), vec3(1.0 / 2.4)) - vec3(0.055);
+    rgb = clamp(rgb, 0.0, 1.0);
+    bvec3 cutoff = lessThan(rgb, vec3(0.0031308));
+    vec3 higher = vec3(1.055) * pow(rgb, vec3(1.0 / 2.4)) - vec3(0.055);
     vec3 lower = rgb * vec3(12.92);
 
     return mix(higher, lower, cutoff);

@@ -11,8 +11,8 @@ layout(push_constant) uniform Push {
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
-#pragma parameter InputSpace "Input (0: System gamma, 1: 2.2 gamma, 2: sRGB)" 0.0 0.0 2.0 1.0
-#pragma parameter YIQ "Composite (0: RGB, 1: YIQ/composite)" 0.0 0.0 1.0 1.0
+
+#include "parameters.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;

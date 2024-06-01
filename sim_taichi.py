@@ -54,7 +54,8 @@ def yiq_to_linear(img, in_gamma):
 
 def linear_to_srgb(img):
     """Linear float to sRGB uint8"""
-    out = np.where(img <= 0.0031308, img * 12.92, 1.055 * (np.power(np.clip(img, 0.0, 1.0), (1.0 / 2.4))) - 0.055)
+    img_clipped = np.clip(img, 0.0, 1.0)
+    out = np.where(img_clipped <= 0.0031308, img_clipped * 12.92, 1.055 * (np.power(img_clipped, (1.0 / 2.4))) - 0.055)
     out = np.around(out * 255).astype(np.uint8)
     return out
 
@@ -67,6 +68,13 @@ def texelFetch(Source, vTexCoords: tm.ivec2) -> tm.vec3:
     if not (vTexCoords.x < 0 or vTexCoords.x >= x_size or vTexCoords.y < 0 or vTexCoords.y >= y_size):
         val = Source[vTexCoords.y, vTexCoords.x]
     return val
+
+
+@ti.func
+def texelFetchRepeat(Source, vTexCoords: tm.ivec2) -> tm.vec3:
+    """Fetch pixel from img at (x, y), with the texture repeated infinitely on both axes"""
+    y_size, x_size = Source.shape
+    return Source[vTexCoords.y % y_size, vTexCoords.x % x_size]
 
 
 @ti.func
@@ -312,25 +320,72 @@ def gaussian_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize:
     return value / weight_sum
 
 
+def generate_mask(mask, out_shape, triads):
+    (mask_height, mask_width, mask_planes) = mask.shape
+    (out_height, out_width, out_planes) = out_shape
+    scale = mask_width / 2 * triads / out_width
+    print("scale: {}".format(scale))
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(mask_height, mask_width))
+    field_in.from_numpy(mask)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_width, mask_height))
+    lanczos3_downscale(field_in, field_out, scale)
+    imwrite('mask_resized_pass1.png', linear_to_srgb(field_out.to_numpy()))  # DEBUG
+    field_in = field_out
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    lanczos3_downscale(field_in, field_out, scale)
+    return field_out.to_numpy()
+
+
+@ti.kernel
+def lanczos3_downscale(field_in: ti.template(), field_out: ti.template(), scale: float):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = lanczos3_taichi(vTexCoord, field_in, SourceSize, OutputSize, scale)
+    return
+
+
+@ti.func
+def lanczos3_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4, scale: float) -> tm.vec3:
+    kernel_size = 2  # 1, 2, or 3
+    x_pos = vTexCoord.y * OutputSize.y * scale
+    y_pos = int(tm.floor(vTexCoord.x * SourceSize.y))
+    weight_sum = 0.0
+    value = tm.vec3(0.0)
+    for x in range(int(tm.round(x_pos - kernel_size * scale)), int(tm.round(x_pos + kernel_size * scale))):  # TODO bounds? round to int
+        distance_x = (x_pos - x - 0.5) / scale
+        weight = 1.0 if distance_x == 0.0 else \
+            (kernel_size * tm.sin(np.pi * distance_x) * tm.sin(np.pi * distance_x / kernel_size)) / (np.pi * np.pi * distance_x * distance_x)
+        weight_sum += weight
+        value += weight * texelFetchRepeat(Source, tm.ivec2(x, y_pos))
+        # if y_pos == 5 and x_pos / scale < 1:
+        #     print(f'x_pos: {x_pos}, x: {x}, distance_x: {distance_x}, weight: {weight}, texel: {texelFetchRepeat(Source, tm.ivec2(x, y_pos))}')
+    return value / weight_sum
+
+
 USE_YIQ = False
 GAMMA = 2.4
 # -6dB cutoff is at 1 / 2L in cycles. We want CUTOFF * 53.33e-6 cycles (CUTOFF bandwidth and NTSC standard active line time of 53.33us).
 # CUTOFF = np.array([5.0e6, 0.6e6, 0.6e6])  # Hz
-CUTOFF = np.array([2.6e6, 2.6e6, 2.6e6])  # Hz
+CUTOFF = np.array([3.2e6, 3.2e6, 3.2e6])  # Hz
 # L = 1 / (CUTOFF * 53.33e-6 * 2)
 Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
 OUTPUT_RESOLUTION = (2160, 2880)  #(2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520)
-MAX_SPOT_SIZE= 0.95
-MIN_SPOT_SIZE= 0.5
-MASK_AMOUNT = 0.0
-BLUR_SIGMA = 0.04
+MAX_SPOT_SIZE= 0.85
+MIN_SPOT_SIZE= 0.4
+MASK_TRIADS = 550
+MASK_AMOUNT = 0.999
+BLUR_SIGMA = 0.03
 BLUR_AMOUNT = 0.15  #0.13
 SAMPLES = 9000 #2880  #907  #1400
 INTERLACING = True
 INTERLACING_EVEN = False
-OVERSCAN_HORIZONTAL = 0.05
-OVERSCAN_VERTICAL = 0.05
+OVERSCAN_HORIZONTAL = 0.0
+OVERSCAN_VERTICAL = 0.0
 
 
 def main():
@@ -387,32 +442,17 @@ def main():
 
     # Mask
     print('Masking...')
-    #mask_resized = imread('mask_slot_distort.png').astype(np.float32) / 255.0  # 65535.0
-    #mask_resized = mask_resized / np.max(mask_resized)
-    #img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized[:, :, 0:3] * MASK_AMOUNT)
+    # mask_tile = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    # mask_tile = np.array([[1, 0, 0], [1, 1, 0], [0, 1, 1], [0, 0, 1]])
+    # mask = np.broadcast_to(mask_tile[np.arange(OUTPUT_RESOLUTION[1]) % mask_tile.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
+    # img_masked = img_spot * ((1 - MASK_AMOUNT) + mask * MASK_AMOUNT)
 
-    # mask = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    # mask_resized = np.broadcast_to(mask[np.arange(OUTPUT_RESOLUTION[1]) % mask.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
-    # img_masked = img_spot * ((1 - MASK_AMOUNT) + mask_resized * MASK_AMOUNT)
+    mask_tile = imread('mask.png')[:, :, 0:3].astype(np.float32) / 255.0
+    mask = generate_mask(mask_tile, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3), MASK_TRIADS)
+    imwrite('mask_resized.png', linear_to_srgb(mask))  # DEBUG
+    img_masked = img_spot * ((1 - MASK_AMOUNT) + mask * MASK_AMOUNT)
 
-    img_masked = img_spot
-
-    # mask_tile = imread('mask.png').astype(np.float32) / 255.0
-    # mask = np.tile(mask_tile, ((2 * 250 * 3 // 4), 250, 1))
-    # imwrite('mask_fullsized.png', linear_to_srgb(mask))
-    # # We have to resize each plane individually because pillow doesn't support
-    # # multiple-channel, floating point images.
-    # mask_red = mask[:, :, 0]
-    # mask_green = mask[:, :, 1]
-    # mask_blue = mask[:, :, 2]
-    # mask_resized = np.zeros((2160, 2880, 3))
-    # mask_resized[:, :, 0] = np.array(Image.fromarray(mask_red, mode='F').resize((2880, 2160), resample=Image.Resampling.LANCZOS))
-    # mask_resized[:, :, 1] = np.array(Image.fromarray(mask_green, mode='F').resize((2880, 2160), resample=Image.Resampling.LANCZOS))
-    # mask_resized[:, :, 2] = np.array(Image.fromarray(mask_blue, mode='F').resize((2880, 2160), resample=Image.Resampling.LANCZOS))
-    # mask_resized = mask_resized / np.max(mask_resized)
-    # mask_resized = np.minimum(mask_resized, 0)
-    # imwrite('mask_resized.png', linear_to_srgb(mask_resized))
-    # img_masked = mask_resized * img_spot
+    #img_masked = img_spot
 
     # Diffusion
     print('Blurring...')

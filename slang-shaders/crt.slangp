@@ -18,7 +18,7 @@ scale_type_y1 = source
 scale_y1 = 1.0
 float_framebuffer1 = true
 
-//======== Draw the scanlines, handling interlacing.
+//======== Draw the scanlines, handling interlacing and overscan.
 // We do the expensive width calculations in a separate pass so that we don't
 // need to duplicate them for every fragment in the next pass.
 shader2 = shaders/calculate_widths.slang
@@ -36,7 +36,7 @@ scale_type3 = viewport
 scale3 = 1.0
 float_framebuffer2 = true
 
-//======== Downscale 3 times (to ~1/8 size) for glow blurring.
+//======== Downscale 3 times (to ~1/8 size per dimension) for glow blurring.
 // Downscale and perform the blur on a smaller texture for performance.
 // Use a 4x4 lanczos1 downscale to minimize aliasing and shimmering in the blur.
 shader4 = shaders/lanczos1_downsample.slang

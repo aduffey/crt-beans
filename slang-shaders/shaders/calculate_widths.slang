@@ -11,8 +11,8 @@ layout(push_constant) uniform Push {
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
-#pragma parameter MaxSpotSize "Maximum spot size (proportion of scanline)" 0.95 0.6 1.0 0.05
-#pragma parameter MinSpotSize "Minimum spot size (proportion of maximum)" 0.5 0.3 1.0 0.1
+
+#include "parameters.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;

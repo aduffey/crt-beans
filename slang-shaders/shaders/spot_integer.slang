@@ -15,11 +15,9 @@ layout(push_constant) uniform Push {
     float OverscanVertical;
 } params;
 
-#pragma parameter MaxSpotSize "Maximum spot size (proportion of scanline)" 0.95 0.6 1.0 0.05
-#pragma parameter MinSpotSize "Minimum spot size (proportion of maximum)" 0.5 0.3 1.0 0.1
-#pragma parameter OddFieldFirst "Interlacing (phase)" 0.0 0.0 1.0 1.0
-#pragma parameter OverscanHorizontal "Horizontal overscan (proportion to crop)" 0.0 0.0 0.1 0.01
-#pragma parameter OverscanVertical "Vertical overscan (proportion to crop)" 0.0 0.0 0.1 0.01
+#pragma format R16G16B16A16_SFLOAT
+
+#include "parameters.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
