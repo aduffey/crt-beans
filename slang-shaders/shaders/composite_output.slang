@@ -43,5 +43,5 @@ vec3 linear_to_srgb(vec3 rgb) {
 void main() {
     vec3 blur_value = textureLod(Source, vTexCoord, 0.0).rgb;
     vec3 scanlines_value = texelFetch(Scanlines, ivec2(floor(vTexCoord * params.ScanlinesSize.xy)), 0).rgb;
-    FragColor = vec4(linear_to_srgb(mix(scanlines_value, blur_value, params.GlowAmount)), 1.0);
+    FragColor.rgb = linear_to_srgb(mix(scanlines_value, blur_value, params.GlowAmount));
 }

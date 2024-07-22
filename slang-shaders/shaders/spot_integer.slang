@@ -105,5 +105,5 @@ void main() {
             distance_x += delta;
         }
     }
-    FragColor = vec4(delta * value, 1.0);
+    FragColor.rgb = delta * value;
 }

@@ -64,5 +64,5 @@ void main() {
         rgb = srgb_to_yiq(rgb);
     }
 
-    FragColor = vec4(rgb, 1.0);
+    FragColor.rgb = rgb;
 }

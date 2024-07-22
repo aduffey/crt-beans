@@ -99,5 +99,5 @@ void main() {
         value += spot(lower_sample, lower_width_rcp, distance_x, lower_distance_y);
         distance_x += delta;
     }
-    FragColor = vec4(delta * value, 1.0);
+    FragColor.rgb = delta * value;
 }

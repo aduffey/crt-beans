@@ -72,5 +72,5 @@ void main() {
         filtered += 0.5 * s * L_rcp * (t1 - t0 + (L / PI) * (sin(L_rcp * ((PI * t) - PI * t0)) - sin(L_rcp * ((PI * t) - PI * t1))));
     }
 
-    FragColor = params.YIQ > 0.5 ? vec4(yiq_to_linear(filtered), 1.0) : vec4(gamma_to_linear(filtered), 1.0);
+    FragColor.rgb = params.YIQ > 0.5 ? yiq_to_linear(filtered) : gamma_to_linear(filtered);
 }

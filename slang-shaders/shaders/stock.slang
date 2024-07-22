@@ -20,5 +20,5 @@ layout(location = 0) out vec4 FragColor;
 layout(set = 0, binding = 2) uniform sampler2D Source;
 
 void main() {
-    FragColor = vec4(texture(Source, vTexCoord).rgb, 1.0);
+    FragColor.rgb = texture(Source, vTexCoord).rgb;
 }

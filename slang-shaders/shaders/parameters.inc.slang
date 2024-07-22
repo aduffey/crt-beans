@@ -1,6 +1,6 @@
 #pragma parameter InputSpace "Input (0: System gamma, 1: 2.2 gamma, 2: sRGB)" 0.0 0.0 2.0 1.0
 #pragma parameter YIQ "Composite (0: RGB, 1: YIQ/composite)" 0.0 0.0 1.0 1.0
-#pragma parameter Cutoff "RGB/Y bandwidth (MHz)" 5.0 0.6 6.0 0.2
+#pragma parameter Cutoff "RGB/Y bandwidth (MHz)" 4.0 0.6 6.0 0.2
 #pragma parameter ICutoff "I bandwidth (MHz)" 0.6 0.6 6.0 0.2
 #pragma parameter QCutoff "Q bandwidth (MHz)" 0.6 0.6 6.0 0.2
 #pragma parameter MaxSpotSize "Maximum spot size (proportion of scanline)" 0.90 0.6 1.0 0.05

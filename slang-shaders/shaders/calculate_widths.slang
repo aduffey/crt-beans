@@ -33,5 +33,5 @@ void main() {
     ivec2 pix_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
     vec3 sample_value = texelFetch(Source, pix_loc, 0).rgb;
     vec3 width_rcp =  1.0 / (params.MinSpotSize * params.MaxSpotSize - sqrt(sample_value) * (params.MinSpotSize * params.MaxSpotSize - params.MaxSpotSize));
-    FragColor = vec4(width_rcp, 1.0);
+    FragColor.rgb = width_rcp;
 }
