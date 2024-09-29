@@ -320,6 +320,40 @@ def gaussian_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize:
     return value / weight_sum
 
 
+def subpixel_mask(img_in):
+    if MASK_PATTERN == 0:
+        mask_tile = np.array([[1, 0, 1], [0, 1, 0]])  # 1080p
+        mask_coverage = 2
+    elif MASK_PATTERN == 1:
+        mask_tile = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])  # 1440p
+        mask_coverage = 3
+    elif MASK_PATTERN == 2:
+        mask_tile = np.array([[1, 0, 0], [1, 1, 0], [0, 1, 1], [0, 0, 1]])  # 4k
+        mask_coverage = 2
+    else:
+        raise AssertionError('Unhandled mask pattern')
+    mask = np.broadcast_to(mask_tile[np.arange(OUTPUT_RESOLUTION[1]) % mask_tile.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
+    # imwrite('lum.png', linear_to_srgb(luminance(img_spot)))  # DEBUG
+    return luminance(img_in) * img_in + mask_coverage * mask * (1.0 - luminance(img_in)) * img_in
+
+
+def luminance(img):
+    lum = np.dot(img, [0.2126, 0.7152, 0.0722])
+    return np.dstack((lum, lum, lum))
+
+
+def tiled_mask(img_in):
+    if MASK_TYPE == 'aperture':
+        mask_tile = imread('mask-aperture.png')[:, :, 0:3].astype(np.float32) / 255.0
+    elif MASK_TYPE == 'slot':
+        mask_tile = imread('mask-slot.png')[:, :, 0:3].astype(np.float32) / 255.0
+    else:
+        raise AssertionError('Unhandled mask type')
+    mask = generate_mask(mask_tile, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3), MASK_TRIADS)
+    # imwrite('mask_resized.png', linear_to_srgb(mask))  # DEBUG
+    return img_in * ((1 - MASK_AMOUNT) + mask * MASK_AMOUNT)
+
+
 def generate_mask(mask, out_shape, triads):
     (mask_height, mask_width, mask_planes) = mask.shape
     (out_height, out_width, out_planes) = out_shape
@@ -329,7 +363,7 @@ def generate_mask(mask, out_shape, triads):
     field_in.from_numpy(mask)
     field_out = ti.Vector.field(n=3, dtype=float, shape=(out_width, mask_height))
     lanczos3_downscale(field_in, field_out, scale)
-    imwrite('mask_resized_pass1.png', linear_to_srgb(field_out.to_numpy()))  # DEBUG
+    # imwrite('mask_resized_pass1.png', linear_to_srgb(field_out.to_numpy()))  # DEBUG
     field_in = field_out
     field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
     lanczos3_downscale(field_in, field_out, scale)
@@ -366,26 +400,36 @@ def lanczos3_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize:
     return value / weight_sum
 
 
+# For low-pass
+SAMPLES = 907 #2880  #907  #1400
 USE_YIQ = False
 GAMMA = 2.4
 # -6dB cutoff is at 1 / 2L in cycles. We want CUTOFF * 53.33e-6 cycles (CUTOFF bandwidth and NTSC standard active line time of 53.33us).
 # CUTOFF = np.array([5.0e6, 0.6e6, 0.6e6])  # Hz
 CUTOFF = np.array([3.2e6, 3.2e6, 3.2e6])  # Hz
-# L = 1 / (CUTOFF * 53.33e-6 * 2)
 Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
-OUTPUT_RESOLUTION = (2160, 2880)  #(2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520)
+
+# For scanlines, interlacing, and overscan
+OUTPUT_RESOLUTION = (2160, 2880)  #(2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520) (1440, 1920)
 MAX_SPOT_SIZE= 0.85
 MIN_SPOT_SIZE= 0.4
-MASK_TRIADS = 550
-MASK_AMOUNT = 0.999
-BLUR_SIGMA = 0.03
-BLUR_AMOUNT = 0.15  #0.13
-SAMPLES = 9000 #2880  #907  #1400
 INTERLACING = True
 INTERLACING_EVEN = False
 OVERSCAN_HORIZONTAL = 0.0
 OVERSCAN_VERTICAL = 0.0
+
+# For subpixel masks
+MASK_PATTERN = 1  # 0 for 2-pixel (1080p), 1 for 3-pixel (1440p), 2 for 4-pixel (4k)
+
+# For tiled masks
+MASK_TYPE = 'aperture'  # 'slot' or 'aperture'
+MASK_TRIADS = 550
+MASK_AMOUNT = 0.5
+
+# Diffusion
+BLUR_SIGMA = 0.02
+BLUR_AMOUNT = 0.07  #0.15  #0.13
 
 
 def main():
@@ -411,7 +455,7 @@ def main():
     # Horizontal low pass filter
     print('Low pass filtering...')
     img_filtered = filter_fragment(img_crt_gamma, (image_height, SAMPLES, 3))
-    imwrite('filtered.png', linear_to_srgb(img_filtered))  # DEBUG
+    # imwrite('filtered.png', linear_to_srgb(img_filtered))  # DEBUG
 
     # DEBUG -- Write Y, I, and Q planes to separate images
     # y_mask = np.array([True, False, False])
@@ -442,17 +486,9 @@ def main():
 
     # Mask
     print('Masking...')
-    # mask_tile = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    # mask_tile = np.array([[1, 0, 0], [1, 1, 0], [0, 1, 1], [0, 0, 1]])
-    # mask = np.broadcast_to(mask_tile[np.arange(OUTPUT_RESOLUTION[1]) % mask_tile.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
-    # img_masked = img_spot * ((1 - MASK_AMOUNT) + mask * MASK_AMOUNT)
-
-    mask_tile = imread('mask.png')[:, :, 0:3].astype(np.float32) / 255.0
-    mask = generate_mask(mask_tile, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3), MASK_TRIADS)
-    imwrite('mask_resized.png', linear_to_srgb(mask))  # DEBUG
-    img_masked = img_spot * ((1 - MASK_AMOUNT) + mask * MASK_AMOUNT)
-
-    #img_masked = img_spot
+    img_masked = tiled_mask(img_spot)
+    # img_masked = subpixel_mask(img_spot)
+    # img_masked = img_spot
 
     # Diffusion
     print('Blurring...')
