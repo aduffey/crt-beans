@@ -44,8 +44,8 @@ vec3 gamma22_to_gamma(vec3 rgb) {
     return pow(rgb, vec3(2.2 / CRT_GAMMA));
 }
 
-vec3 srgb_to_yiq(vec3 srgb) {
-    return GAMMA_YIQ_MAT * srgb_to_gamma(srgb);
+vec3 gamma_to_yiq(vec3 rgb) {
+    return GAMMA_YIQ_MAT * rgb;
 }
 
 void main() {
@@ -61,7 +61,7 @@ void main() {
 
     // Then convert to YIQ if necessary.
     if (params.YIQ > 0.5) {
-        rgb = srgb_to_yiq(rgb);
+        rgb = gamma_to_yiq(rgb);
     }
 
     FragColor.rgb = rgb;
