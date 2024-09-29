@@ -4,6 +4,8 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     mat4 MVP;
 };
 
+#pragma format R16G16B16A16_SFLOAT
+
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
 layout(location = 1) in vec2 TexCoord;
