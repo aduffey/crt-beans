@@ -8,5 +8,5 @@
 #pragma parameter OddFieldFirst "Interlacing (phase)" 0.0 0.0 1.0 1.0
 #pragma parameter OverscanHorizontal "Horizontal overscan (proportion to crop)" 0.0 0.0 0.1 0.01
 #pragma parameter OverscanVertical "Vertical overscan (proportion to crop)" 0.0 0.0 0.1 0.01
-#pragma parameter GlowSigma "Glow width (proportion of screen height)" 0.03 0.01 0.05 0.01
-#pragma parameter GlowAmount "Glow amount (mix ratio)" 0.10 0.0 1.0 0.05
+#pragma parameter GlowSigma "Glow width (proportion of screen height)" 0.02 0.01 0.05 0.01
+#pragma parameter GlowAmount "Glow amount (mix ratio)" 0.08 0.0 1.0 0.02
