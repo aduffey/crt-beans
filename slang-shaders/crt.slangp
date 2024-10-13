@@ -85,7 +85,7 @@ float_framebuffer8 = true
 // with small blur sigmas. However, here are no blocky artifacts like we would
 // get if we upscaled straight to the viewport size. The final upscale happens
 // in the composite pass.
-shader9 = shaders/stock.slang
+shader9 = shaders/bilinear_upsample.slang
 filter_linear9 = true
 wrap_mode9 = clamp_to_border
 mipmap_input9 = false
@@ -93,7 +93,7 @@ scale_type9 = source
 scale9 = 2.0
 float_framebuffer9 = true
 
-shader10 = shaders/stock.slang
+shader10 = shaders/bilinear_upsample.slang
 filter_linear10 = true
 wrap_mode10 = clamp_to_border
 mipmap_input10 = false
