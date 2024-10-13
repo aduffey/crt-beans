@@ -610,6 +610,86 @@ def cubic_gaussian_bloom(image_in, passes, sigma):
     return field_next.to_numpy()
 
 
+def cubic_bilinear_blur(image_in, sigma):
+    (in_height, in_width, in_planes) = image_in.shape
+    field_previous = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_previous.from_numpy(image_in)
+    for i in range(3):
+        previous_height, previous_width = field_previous.shape
+        field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_height // 2, previous_width // 2))
+        cubic_fragment(field_previous, field_next)
+        field_previous = field_next
+        img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+        imwrite("{}-cubic-bilinear.png".format(i), img_srgb)  # DEBUG
+
+    previous_height, previous_width = field_previous.shape
+    field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_width, previous_height))
+    print('sigma_x = {}'.format(sigma / (in_width / previous_width)))
+    gaussian_fragment(field_previous, field_next, sigma / (in_width / previous_width))
+    img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+    imwrite("horiz-cubic-bilinear.png".format(i), img_srgb)  # DEBUG
+
+    field_previous = field_next
+    field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_height, previous_width))
+    print('sigma_y = {}'.format(sigma / (in_height / previous_height)))
+    gaussian_fragment(field_previous, field_next, sigma / (in_height / previous_height))
+    img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+    imwrite("vert-cubic-bilinear.png".format(i), img_srgb)  # DEBUG
+
+    field_previous = field_next
+    for i in range(2):
+        previous_height, previous_width = field_previous.shape
+        field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_height * 2, previous_width * 2))
+        bilinear_fragment(field_previous, field_next)
+        field_previous = field_next
+        img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+        imwrite("{}-up-cubic-bilinear.png".format(i), img_srgb)  # DEBUG
+    field_next = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    bilinear_fragment(field_previous, field_next)
+
+    return field_next.to_numpy()
+
+
+def lanczos_bilinear_blur(image_in, sigma):
+    (in_height, in_width, in_planes) = image_in.shape
+    field_previous = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_previous.from_numpy(image_in)
+    for i in range(3):
+        previous_height, previous_width = field_previous.shape
+        field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_height // 2, previous_width // 2))
+        lanczos1_fragment(field_previous, field_next)
+        field_previous = field_next
+        img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+        imwrite("{}-lanzcos-bilinear.png".format(i), img_srgb)  # DEBUG
+
+    previous_height, previous_width = field_previous.shape
+    field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_width, previous_height))
+    print('sigma_x = {}'.format(sigma / (in_width / previous_width)))
+    gaussian_fragment(field_previous, field_next, sigma / (in_width / previous_width))
+    img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+    imwrite("horiz-lanczos-bilinear.png".format(i), img_srgb)  # DEBUG
+
+    field_previous = field_next
+    field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_height, previous_width))
+    print('sigma_y = {}'.format(sigma / (in_height / previous_height)))
+    gaussian_fragment(field_previous, field_next, sigma / (in_height / previous_height))
+    img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+    imwrite("vert-lanczos-bilinear.png".format(i), img_srgb)  # DEBUG
+
+    field_previous = field_next
+    for i in range(2):
+        previous_height, previous_width = field_previous.shape
+        field_next = ti.Vector.field(n=3, dtype=float, shape=(previous_height * 2, previous_width * 2))
+        bilinear_fragment(field_previous, field_next)
+        field_previous = field_next
+        img_srgb = linear_to_srgb(field_next.to_numpy())  # DEBUG
+        imwrite("{}-up-lanczos-bilinear.png".format(i), img_srgb)  # DEBUG
+    field_next = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    bilinear_fragment(field_previous, field_next)
+
+    return field_next.to_numpy()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate a CRT-simulated image')
     parser.add_argument('input')
@@ -639,69 +719,85 @@ def main():
     print('SSIM: {}'.format(ssim(img_standard, img_sk, channel_axis=-1)))
     imwrite("skimage-out.png", img_sk)
 
-    print('4-pass box blur...')
-    img_box = box_blur(img_linear, sigma)
-    img_box = np.clip(img_box, 0, 1)
-    img_box = linear_to_srgb(img_box)
-    print("PSNR: {}".format(psnr(img_standard, img_box)))
-    print('SSIM: {}'.format(ssim(img_standard, img_box, channel_axis=-1)))
-    imwrite("box-out.png", img_box)
+    # print('4-pass box blur...')
+    # img_box = box_blur(img_linear, sigma)
+    # img_box = np.clip(img_box, 0, 1)
+    # img_box = linear_to_srgb(img_box)
+    # print("PSNR: {}".format(psnr(img_standard, img_box)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_box, channel_axis=-1)))
+    # imwrite("box-out.png", img_box)
 
-    print('Chained gaussian blur...')
-    img_cg = chained_gaussian_blur(img_linear, 1.0)
-    img_cg = np.clip(img_cg, 0, 1)
-    img_cg = linear_to_srgb(img_cg)
-    print("PSNR: {}".format(psnr(img_standard, img_cg)))
-    print('SSIM: {}'.format(ssim(img_standard, img_cg, channel_axis=-1)))
-    imwrite("chained-gaussian-out.png", img_cg)
+    # print('Chained gaussian blur...')
+    # img_cg = chained_gaussian_blur(img_linear, 1.0)
+    # img_cg = np.clip(img_cg, 0, 1)
+    # img_cg = linear_to_srgb(img_cg)
+    # print("PSNR: {}".format(psnr(img_standard, img_cg)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_cg, channel_axis=-1)))
+    # imwrite("chained-gaussian-out.png", img_cg)
 
-    print('Cubic down + gaussian up blur...')
-    img_cubic = cubic_blur(img_linear, sigma)
-    img_cubic = np.clip(img_cubic, 0, 1)
-    img_cubic = linear_to_srgb(img_cubic)
-    print("PSNR: {}".format(psnr(img_standard, img_cubic)))
-    print('SSIM: {}'.format(ssim(img_standard, img_cubic, channel_axis=-1)))
-    imwrite("cubic-out.png", img_cubic)
+    # print('Cubic down + gaussian up blur...')
+    # img_cubic = cubic_blur(img_linear, sigma)
+    # img_cubic = np.clip(img_cubic, 0, 1)
+    # img_cubic = linear_to_srgb(img_cubic)
+    # print("PSNR: {}".format(psnr(img_standard, img_cubic)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_cubic, channel_axis=-1)))
+    # imwrite("cubic-out.png", img_cubic)
 
-    print('Cubic down 2 + gaussian up blur...')
-    img_cubic2 = cubic_blur2(img_linear, sigma)
-    img_cubic2 = np.clip(img_cubic2, 0, 1)
-    img_cubic2 = linear_to_srgb(img_cubic2)
-    print("PSNR: {}".format(psnr(img_standard, img_cubic2)))
-    print('SSIM: {}'.format(ssim(img_standard, img_cubic2, channel_axis=-1)))
-    imwrite("cubic2-out.png", img_cubic2)
+    # print('Cubic down 2 + gaussian up blur...')
+    # img_cubic2 = cubic_blur2(img_linear, sigma)
+    # img_cubic2 = np.clip(img_cubic2, 0, 1)
+    # img_cubic2 = linear_to_srgb(img_cubic2)
+    # print("PSNR: {}".format(psnr(img_standard, img_cubic2)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_cubic2, channel_axis=-1)))
+    # imwrite("cubic2-out.png", img_cubic2)
 
-    print('Cubic down 3 + gaussian up blur...')
-    img_cubic3 = cubic_blur3(img_linear, sigma)
-    img_cubic3 = np.clip(img_cubic3, 0, 1)
-    img_cubic3 = linear_to_srgb(img_cubic3)
-    print("PSNR: {}".format(psnr(img_standard, img_cubic3)))
-    print('SSIM: {}'.format(ssim(img_standard, img_cubic3, channel_axis=-1)))
-    imwrite("cubic3-out.png", img_cubic3)
+    # print('Cubic down 3 + gaussian up blur...')
+    # img_cubic3 = cubic_blur3(img_linear, sigma)
+    # img_cubic3 = np.clip(img_cubic3, 0, 1)
+    # img_cubic3 = linear_to_srgb(img_cubic3)
+    # print("PSNR: {}".format(psnr(img_standard, img_cubic3)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_cubic3, channel_axis=-1)))
+    # imwrite("cubic3-out.png", img_cubic3)
 
-    print('Bilinear down + gaussian up blur...')
-    img_bilinear = bilinear_blur(img_linear, sigma)
-    img_bilinear = np.clip(img_bilinear, 0, 1)
-    img_bilinear = linear_to_srgb(img_bilinear)
-    print("PSNR: {}".format(psnr(img_standard, img_bilinear)))
-    print('SSIM: {}'.format(ssim(img_standard, img_bilinear, channel_axis=-1)))
-    imwrite("bilinear-out.png", img_bilinear)
+    # print('Bilinear down + gaussian up blur...')
+    # img_bilinear = bilinear_blur(img_linear, sigma)
+    # img_bilinear = np.clip(img_bilinear, 0, 1)
+    # img_bilinear = linear_to_srgb(img_bilinear)
+    # print("PSNR: {}".format(psnr(img_standard, img_bilinear)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_bilinear, channel_axis=-1)))
+    # imwrite("bilinear-out.png", img_bilinear)
 
-    print('Bilinear down + gaussian uncorrected up blur...')
-    img_bilinear = bilinear_blur_uncorrected(img_linear, sigma)
-    img_bilinear = np.clip(img_bilinear, 0, 1)
-    img_bilinear = linear_to_srgb(img_bilinear)
-    print("PSNR: {}".format(psnr(img_standard, img_bilinear)))
-    print('SSIM: {}'.format(ssim(img_standard, img_bilinear, channel_axis=-1)))
-    imwrite("bilinear-uncorrected-out.png", img_bilinear)
+    # print('Bilinear down + gaussian uncorrected up blur...')
+    # img_bilinear = bilinear_blur_uncorrected(img_linear, sigma)
+    # img_bilinear = np.clip(img_bilinear, 0, 1)
+    # img_bilinear = linear_to_srgb(img_bilinear)
+    # print("PSNR: {}".format(psnr(img_standard, img_bilinear)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_bilinear, channel_axis=-1)))
+    # imwrite("bilinear-uncorrected-out.png", img_bilinear)
 
-    print('Lanczos1 down + gaussian up blur...')
-    img_lanczos1 = lanczos1_blur(img_linear, 1.0)
-    img_lanczos1 = np.clip(img_lanczos1, 0, 1)
-    img_lanczos1 = linear_to_srgb(img_lanczos1)
-    print("PSNR: {}".format(psnr(img_standard, img_lanczos1)))
-    print('SSIM: {}'.format(ssim(img_standard, img_lanczos1, channel_axis=-1)))
-    imwrite("lanczos1-out.png", img_lanczos1)
+    # print('Lanczos1 down + gaussian up blur...')
+    # img_lanczos1 = lanczos1_blur(img_linear, 1.0)
+    # img_lanczos1 = np.clip(img_lanczos1, 0, 1)
+    # img_lanczos1 = linear_to_srgb(img_lanczos1)
+    # print("PSNR: {}".format(psnr(img_standard, img_lanczos1)))
+    # print('SSIM: {}'.format(ssim(img_standard, img_lanczos1, channel_axis=-1)))
+    # imwrite("lanczos1-out.png", img_lanczos1)
+
+    print('Cubic down + bilinear up blur...')
+    img_cubic_bilinear = cubic_bilinear_blur(img_linear, sigma)
+    img_cubic_bilinear = np.clip(img_cubic_bilinear, 0, 1)
+    img_cubic_bilinear = linear_to_srgb(img_cubic_bilinear)
+    print("PSNR: {}".format(psnr(img_standard, img_cubic_bilinear)))
+    print('SSIM: {}'.format(ssim(img_standard, img_cubic_bilinear, channel_axis=-1)))
+    imwrite("cubic-bilinear-out.png", img_cubic_bilinear)
+
+    print('Lanczos1 down + bilinear up blur...')
+    img_lanczos_bilinear = lanczos_bilinear_blur(img_linear, sigma)
+    img_lanczos_bilinear = np.clip(img_lanczos_bilinear, 0, 1)
+    img_lanczos_bilinear = linear_to_srgb(img_lanczos_bilinear)
+    print("PSNR: {}".format(psnr(img_standard, img_lanczos_bilinear)))
+    print('SSIM: {}'.format(ssim(img_standard, img_lanczos_bilinear, channel_axis=-1)))
+    imwrite("lanczos-bilinear-out.png", img_lanczos_bilinear)
 
 
 if __name__ == '__main__':
