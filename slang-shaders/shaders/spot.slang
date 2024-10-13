@@ -52,7 +52,7 @@ layout(binding = 2) uniform sampler2D Filtered;
 vec3 spot(vec3 sample_value, vec3 width_rcp, float distance_x, float distance_y) {
     vec3 x = clamp(abs(distance_x) * width_rcp, 0.0, 1.0);
     vec3 y = clamp(abs(distance_y) * width_rcp, 0.0, 1.0);
-    return sample_value * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0);
+    return sample_value * width_rcp * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0);
 }
 
 void main() {
@@ -99,5 +99,5 @@ void main() {
         value += spot(lower_sample, lower_width_rcp, distance_x, lower_distance_y);
         distance_x += delta;
     }
-    FragColor.rgb = delta * value;
+    FragColor.rgb = delta * params.MaxSpotSize * value;
 }

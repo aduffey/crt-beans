@@ -188,7 +188,7 @@ def spot1(sample, distance_x, distance_y):
     width_rcp = 1.0 / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
     y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
-    return sample * width_rcp * (0.5 * tm.cos(np.pi * x) + 0.5) * (0.5 * tm.cos(np.pi * y) + 0.5)
+    return sample * MAX_SPOT_SIZE * width_rcp**2 * (0.5 * tm.cos(np.pi * x) + 0.5) * (0.5 * tm.cos(np.pi * y) + 0.5)
 
 
 @ti.func
@@ -196,7 +196,7 @@ def spot2(sample, distance_x, distance_y):
     width_rcp = 1.0 / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.min(abs(distance_x) * width_rcp - 0.5, 0.5)
     y = tm.min(abs(distance_y) * width_rcp - 0.5, 0.5)
-    return sample * width_rcp * (2.0 * (x * abs(x) - x) + 0.5) * (2.0 * (y * abs(y) - y) + 0.5)
+    return sample * MAX_SPOT_SIZE * width_rcp**2 * (2.0 * (x * abs(x) - x) + 0.5) * (2.0 * (y * abs(y) - y) + 0.5)
 
 
 @ti.func
@@ -204,7 +204,7 @@ def spot3(sample, distance_x, distance_y):
     width_rcp = 1.0 / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, 0.0, 1.0)
     y = tm.clamp(abs(distance_y) * width_rcp, 0.0, 1.0)
-    return sample * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0)
+    return sample * MAX_SPOT_SIZE * width_rcp**2 * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0)
 
 
 f16vec3 = ti.types.vector(3, ti.f16)
@@ -241,7 +241,7 @@ def spot3_float16(sample: f16vec3, distance_x: f16vec3, distance_y: f16vec3) -> 
     width_rcp = ti.f16(1.0) / tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x = tm.clamp(abs(distance_x) * width_rcp, ti.f16(0.0), ti.f16(1.0))
     y = tm.clamp(abs(distance_y) * width_rcp, ti.f16(0.0), ti.f16(1.0))
-    return sample * width_rcp * \
+    return sample * MAX_SPOT_SIZE * width_rcp**2 * \
             ((x * x) * (ti.f16(2.0) * x - ti.f16(3.0)) + ti.f16(1.0)) * \
             ((y * y) * (ti.f16(2.0) * y - ti.f16(3.0)) + ti.f16(1.0))
 
@@ -384,13 +384,14 @@ def lanczos3_downscale(field_in: ti.template(), field_out: ti.template(), scale:
 
 @ti.func
 def lanczos3_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4, scale: float) -> tm.vec3:
-    kernel_size = 2  # 1, 2, or 3
+    kernel_size = 3  # 1, 2, or 3
     x_pos = vTexCoord.y * OutputSize.y * scale
     y_pos = int(tm.floor(vTexCoord.x * SourceSize.y))
     weight_sum = 0.0
     value = tm.vec3(0.0)
     for x in range(int(tm.round(x_pos - kernel_size * scale)), int(tm.round(x_pos + kernel_size * scale))):  # TODO bounds? round to int
         distance_x = (x_pos - x - 0.5) / scale
+        assert abs(distance_x) <= kernel_size
         weight = 1.0 if distance_x == 0.0 else \
             (kernel_size * tm.sin(np.pi * distance_x) * tm.sin(np.pi * distance_x / kernel_size)) / (np.pi * np.pi * distance_x * distance_x)
         weight_sum += weight
@@ -398,6 +399,27 @@ def lanczos3_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize:
         # if y_pos == 5 and x_pos / scale < 1:
         #     print(f'x_pos: {x_pos}, x: {x}, distance_x: {distance_x}, weight: {weight}, texel: {texelFetchRepeat(Source, tm.ivec2(x, y_pos))}')
     return value / weight_sum
+
+
+def tone_map(srgb):
+    # sRGB -> ACES
+    acesInput = np.array([
+            [0.59719, 0.35458, 0.04823],
+            [0.07600, 0.90834, 0.01566],
+            [0.02840, 0.13383, 0.83777]])
+
+    # ACES -> sRGB
+    acesOutput = np.array([
+            [ 1.60475, -0.53108, -0.07367],
+            [-0.10208,  1.10813, -0.00605],
+            [-0.00327, -0.07276,  1.07602]])
+
+    v = np.tensordot(srgb, acesInput, axes=1)
+    print(v.shape)
+    a = v * (v + 0.0245786) - 0.000090537
+    b = v * (0.983729 * v + 0.4329510) + 0.238081
+    print((a/b).shape)
+    return np.tensordot(a / b, acesOutput, axes=1)
 
 
 # For low-pass
@@ -423,34 +445,27 @@ OVERSCAN_VERTICAL = 0.0
 MASK_PATTERN = 1  # 0 for 2-pixel (1080p), 1 for 3-pixel (1440p), 2 for 4-pixel (4k)
 
 # For tiled masks
-MASK_TYPE = 'aperture'  # 'slot' or 'aperture'
-MASK_TRIADS = 550
-MASK_AMOUNT = 0.5
+MASK_TYPE = 'slot'  # 'slot' or 'aperture'
+MASK_TRIADS = 600
+MASK_AMOUNT = 1.0
 
 # Diffusion
 BLUR_SIGMA = 0.02
 BLUR_AMOUNT = 0.07  #0.15  #0.13
 
 
-def main():
-    print('L = {}'.format(L))
-
-    parser = argparse.ArgumentParser(description='Generate a CRT-simulated image')
-    parser.add_argument('input')
-    parser.add_argument('output')
-    args = parser.parse_args()
-
+# TODO Clean this up. Parameterize options.
+def simulate(img):
     # Read image
-    img_original = imread(args.input)
-    image_height, image_width, planes = img_original.shape
+    image_height, image_width, planes = img.shape
 
     # To CRT gamma
     if USE_YIQ:
-        img_crt_gamma = srgb_to_yiq(img_original, GAMMA)
+        img_crt_gamma = srgb_to_yiq(img, GAMMA)
     else:
-        #img_crt_gamma = srgb_to_gamma(img_original, GAMMA)
-        #img_crt_gamma = gamma_to_gamma(img_original.astype(np.float32) / 255, 2.2, GAMMA)
-        img_crt_gamma = img_original.astype(np.float32) / 255
+        #img_crt_gamma = srgb_to_gamma(img, GAMMA)
+        #img_crt_gamma = gamma_to_gamma(img.astype(np.float32) / 255, 2.2, GAMMA)
+        img_crt_gamma = img.astype(np.float32) / 255
 
     # Horizontal low pass filter
     print('Low pass filtering...')
@@ -486,9 +501,9 @@ def main():
 
     # Mask
     print('Masking...')
-    img_masked = tiled_mask(img_spot)
+    # img_masked = tiled_mask(img_spot)
     # img_masked = subpixel_mask(img_spot)
-    # img_masked = img_spot
+    img_masked = img_spot
 
     # Diffusion
     print('Blurring...')
@@ -496,14 +511,35 @@ def main():
     # box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
     # blurred = box_blur(img_masked, box_radius)
     # blurred = skimage.filters.gaussian(img_masked, sigma=sigma, mode='constant', preserve_range=True, channel_axis=-1)
-    blurred = gaussian_blur(img_masked, sigma=sigma)
+    # blurred = gaussian_blur(img_masked, sigma=sigma)
     #imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
-    img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
-    #img_diffused = img_masked
+    # img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
+    img_diffused = img_masked
+
+    return img_diffused
+
+    # To sRGB
+    # print('Color transform and save...')
+    # img_final_srgb = linear_to_srgb(img_diffused)
+
+
+def main():
+    print('L = {}'.format(L))
+
+    parser = argparse.ArgumentParser(description='Generate a CRT-simulated image')
+    parser.add_argument('input')
+    parser.add_argument('output')
+    args = parser.parse_args()
+
+    # Read image
+    img_original = imread(args.input)
+
+    # Simulate
+    img_crt = simulate(img)
 
     # To sRGB
     print('Color transform and save...')
-    img_final_srgb = linear_to_srgb(img_diffused)
+    img_final_srgb = linear_to_srgb(img_crt)
 
     imwrite(args.output, img_final_srgb)
 
