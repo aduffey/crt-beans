@@ -24,16 +24,12 @@ def gamma_to_gamma(img, in_gamma, out_gamma):
     return np.power(np.power(np.clip(img, 0.0, 1.0), in_gamma), 1.0 / out_gamma)
 
 
-def srgb_to_yiq(img, out_gamma):
+def gamma_to_yiq(img):
     """sRGB uint8 to YIQ float"""
-    out = img.astype(np.float32) / 255
-    out = np.where(out <= 0.04045, out / 12.92, np.power((out + 0.055) / 1.055, 2.4))
-    out = np.power(out, 1.0 / out_gamma)
     rgb2yiq = np.array([[0.30, 0.59, 0.11],
                         [0.599, -0.2773, -0.3217],
                         [0.213, -0.5251, 0.3121]])
-    out = np.dot(out, rgb2yiq.T.copy())
-    return out
+    return np.dot(img, rgb2yiq.T.copy())
 
 
 def gamma_to_linear(img, in_gamma):
@@ -434,8 +430,8 @@ L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
 
 # For scanlines, interlacing, and overscan
 OUTPUT_RESOLUTION = (2160, 2880)  #(2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520) (1440, 1920)
-MAX_SPOT_SIZE= 0.85
-MIN_SPOT_SIZE= 0.4
+MAX_SPOT_SIZE = 0.85
+MIN_SPOT_SIZE = 0.4
 INTERLACING = True
 INTERLACING_EVEN = False
 OVERSCAN_HORIZONTAL = 0.0
@@ -460,12 +456,12 @@ def simulate(img):
     image_height, image_width, planes = img.shape
 
     # To CRT gamma
+    #img_crt_gamma = srgb_to_gamma(img, GAMMA)
+    #img_crt_gamma = gamma_to_gamma(img.astype(np.float32) / 255, 2.2, GAMMA)
+    img_crt_gamma = img.astype(np.float32) / 255
+
     if USE_YIQ:
-        img_crt_gamma = srgb_to_yiq(img, GAMMA)
-    else:
-        #img_crt_gamma = srgb_to_gamma(img, GAMMA)
-        #img_crt_gamma = gamma_to_gamma(img.astype(np.float32) / 255, 2.2, GAMMA)
-        img_crt_gamma = img.astype(np.float32) / 255
+        img_crt_gamma = gamma_to_yiq(img_crt_gamma)
 
     # Horizontal low pass filter
     print('Low pass filtering...')
@@ -535,7 +531,7 @@ def main():
     img_original = imread(args.input)
 
     # Simulate
-    img_crt = simulate(img)
+    img_crt = simulate(img_original)
 
     # To sRGB
     print('Color transform and save...')
