@@ -1,0 +1,24 @@
+shaders = 3
+
+//======== Linearize gamma.
+shader0 = shaders/linearize.slang
+alias0 = Linearized
+mipmap_input0 = false
+scale_type0 = source
+scale0 = 1.0
+
+//======== Draw the scanlines, handling interlacing and overscan.
+// We do the expensive width calculations in a separate pass so that we don't
+// need to duplicate them for every fragment in the next pass.
+shader1 = shaders/calculate_widths.slang
+mipmap_input1 = false
+scale_type1 = source
+scale1 = 1.0
+
+shader2 = shaders/spot_fastest.slang
+alias2 = Scanlines
+filter_linear2 = false
+wrap_mode2 = clamp_to_border
+mipmap_input2 = false
+scale_type2 = viewport
+scale2 = 1.0

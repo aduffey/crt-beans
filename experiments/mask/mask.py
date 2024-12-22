@@ -27,6 +27,11 @@ def luminance(img):
     return np.dstack((lum, lum, lum))
 
 
+def max_pixel(img):
+    m = np.max(img, axis=2)
+    return np.dstack((m, m, m))
+
+
 def main():
     # Generate a 0.0 -> 1.0 linear gradient
     grad = np.linspace(0.0, 1.0, OUTPUT_RESOLUTION[0])
@@ -42,8 +47,13 @@ def main():
     img_masked_linear = lum * grad_rgb + 3 * mask * (1.0 - lum) * grad_rgb
 
     # Piecewise phase-in. The original image starts phasing in at 1/3 luminance, then linearly up until 1.
-    lum = np.clip(1.5 * lum - 0.5, 0.0, 1.0)
-    img_masked_piecewise = lum * grad_rgb + 3 * mask * (1.0 - lum) * grad_rgb
+    m = max_pixel(grad_rgb)
+    weight = np.clip(1.5 * m - 0.5, 0.0, 1.0)
+    img_masked_piecewise = weight * grad_rgb + 3 * mask * (1.0 - weight) * grad_rgb
+
+    # Bezier phase-in. Ramps up the mask to higher strength faster than linear but has no discontinuity like piecewise.
+    # lum = luminance(grad_rgb)
+    # img_masked_bezier = lum * grad_rgb + 3 * mask * (1.0 - lum) * grad_rgb
 
     # Assemble the output image.
     # * Linear phase-in is on top.

@@ -13,11 +13,11 @@ layout(push_constant) uniform Push {
     float OddFieldFirst;
     float OverscanHorizontal;
     float OverscanVertical;
+    float OutputGamma;
 } params;
 
-#pragma format R16G16B16A16_SFLOAT
-
-#include "parameters.inc.slang"
+#include "parameters_common.inc.slang"
+#include "parameters_fast.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -66,9 +66,9 @@ void main() {
     // odd lines. If we aren't, just grab the two closest lines.
     if (params.SourceSize.y > 300.0) {  // Interlacing
         if ((params.FrameCount + (params.OddFieldFirst > 0.5 ? 1u : 0u)) % 2u == 0u) {
-            upper_sample_y = floor(ceil(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2.0 + 0.5;
+            upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y + 0.25) * 2.0 - 0.5;
         } else {
-            upper_sample_y = floor(floor(vTexCoord.y * params.SourceSize.y + 0.5) * 0.5) * 2.0 + 1.5;
+            upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y - 0.25) * 2.0 + 0.5;
         }
         lower_sample_y = upper_sample_y - 2.0;
         // TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?

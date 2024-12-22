@@ -5,13 +5,15 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 };
 
 layout(push_constant) uniform Push {
+    float OutputGamma;
     vec4 SourceSize;
     vec4 ScanlinesSize;
     float GlowSigma;
     float GlowAmount;
 } params;
 
-#include "parameters.inc.slang"
+#include "parameters_common.inc.slang"
+#include "parameters_advanced.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -40,8 +42,20 @@ vec3 linear_to_srgb(vec3 rgb) {
     return mix(higher, lower, cutoff);
 }
 
+vec3 linear_to_gamma(vec3 rgb) {
+    // Floating point inaccuracies could result in negative values, so we'll
+    // clamp here to avoid NaNs.
+    rgb = clamp(rgb, 0.0, 1.0);
+    return pow(rgb, vec3(1.0 / 2.2));
+}
+
 void main() {
     vec3 blur_value = textureLod(Source, vTexCoord, 0.0).rgb;
     vec3 scanlines_value = texelFetch(Scanlines, ivec2(floor(vTexCoord * params.ScanlinesSize.xy)), 0).rgb;
-    FragColor.rgb = linear_to_srgb(mix(scanlines_value, blur_value, params.GlowAmount));
+    if (params.OutputGamma < 0.5) {
+        FragColor.rgb = linear_to_srgb(mix(scanlines_value, blur_value, params.GlowAmount));
+    } else {
+        FragColor.rgb = linear_to_gamma(mix(scanlines_value, blur_value, params.GlowAmount));
+    }
+
 }

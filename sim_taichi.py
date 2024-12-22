@@ -203,6 +203,110 @@ def spot3(sample, distance_x, distance_y):
     return sample * MAX_SPOT_SIZE * width_rcp**2 * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0)
 
 
+@ti.func
+def spot_sim_gauss(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
+    # Overscan
+    vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
+
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
+    upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
+    lower_sample_y = upper_sample_y - 1
+    # The >= is important here. We need to make sure that we work in the same
+    # direction that the upper_sample_y is rounded from.
+    third_sample_y = upper_sample_y - 2 if tm.fract(vTexCoord.y * SourceSize.y) >= 0.5 else upper_sample_y + 1
+    upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    third_distance_y = (third_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+
+    output = tm.vec3(0.0)
+    max_sigma = MAX_SPOT_SIZE / (2 * tm.sqrt(2 * tm.log(2)))
+    for sample_x in range(int(tm.round(vTexCoord.x * SourceSize.x - ((3 * max_sigma) / delta))),
+                          int(tm.round(vTexCoord.x * SourceSize.x + ((3 * max_sigma) / delta)))):
+        upper_sample = texelFetch(img, tm.ivec2(sample_x, upper_sample_y))
+        lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
+        third_sample = texelFetch(img, tm.ivec2(sample_x, third_sample_y))
+        distance_x = delta * ((sample_x + 0.5) - vTexCoord.x * SourceSize.x)
+        output += spot_gauss(upper_sample, distance_x, upper_distance_y)
+        output += spot_gauss(lower_sample, distance_x, lower_distance_y)
+        output += spot_gauss(third_sample, distance_x, third_distance_y)
+    output = delta * output
+    # Rescale output so that the maximum value is one.
+    peak = (tm.sqrt(np.pi / 2) * abs(max_sigma)) / (max_sigma * max_sigma) * (1.0 + 2.0 * tm.exp(-1.0 / (2 * max_sigma * max_sigma)))
+    return output / peak
+
+
+@ti.func
+def spot_gauss(sample, distance_x, distance_y):
+    width = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    sigma = width / (2 * tm.sqrt(2 * tm.log(2)))
+    x = distance_x
+    y = distance_y
+    # We don't need pi, as in the normal distribution, because we are
+    # rescaling later (we can ignore constant factors).
+    return sample / (2 * sigma * sigma) * tm.exp(-(x * x + y * y) / (2 * sigma * sigma))
+
+
+def spot_fast_fragment(image_in, output_dim):
+    (in_height, in_width, in_planes) = image_in.shape
+    (out_height, out_width, out_planes) = output_dim
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    output_field = taichi_spot_fast_fragment(field_in, field_out)
+    return field_out.to_numpy()
+
+
+@ti.kernel
+def taichi_spot_fast_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = spot_sim_fast(vTexCoord, field_in, SourceSize, OutputSize)
+    return
+
+@ti.func
+def spot_sim_fast(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
+    # Overscan
+    vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
+
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
+    upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
+    lower_sample_y = upper_sample_y - 1
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
+    upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+
+    output = tm.vec3(0.0)
+    x = vTexCoord.x * SourceSize.x * delta
+    for sample_x in range(int(tm.floor(vTexCoord.x * SourceSize.x - (MAX_SPOT_SIZE / delta))),
+                          int(tm.floor(vTexCoord.x * SourceSize.x + (MAX_SPOT_SIZE / delta))) + 1):
+        upper_sample = texelFetch(img, tm.ivec2(sample_x, upper_sample_y))
+        lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
+        x0 = delta * sample_x
+        x1 = x0 + delta
+        output += spot_fast(upper_sample, x, x0, x1, upper_distance_y)
+        output += spot_fast(lower_sample, x, x0, x1, lower_distance_y)
+    return output
+
+
+@ti.func
+def spot_fast(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
+    w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x0 = tm.clamp(x0_, x - w, x + w)
+    x1 = tm.clamp(x1_, x - w, x + w)
+    y = tm.clamp(abs(y_) / w, 0.0, 1.0)
+    return MAX_SPOT_SIZE * 0.5 * (0.5 * tm.cos(np.pi * y) + 0.5) * sample * 1.0 / w**2 * \
+            (x1 - x0 + (w / np.pi) * (tm.sin(1.0 / w * ((np.pi * x) - np.pi * x0)) - tm.sin(1.0 / w * ((np.pi * x) - np.pi * x1))))
+
+
 f16vec3 = ti.types.vector(3, ti.f16)
 
 
@@ -326,6 +430,9 @@ def subpixel_mask(img_in):
     elif MASK_PATTERN == 2:
         mask_tile = np.array([[1, 0, 0], [1, 1, 0], [0, 1, 1], [0, 0, 1]])  # 4k
         mask_coverage = 2
+    elif MASK_PATTERN == 3:
+        mask_tile = np.array([[1, 0, 0], [1, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]])  # 4k, lower TVL
+        mask_coverage = 15 / 6
     else:
         raise AssertionError('Unhandled mask pattern')
     mask = np.broadcast_to(mask_tile[np.arange(OUTPUT_RESOLUTION[1]) % mask_tile.shape[0]], (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
@@ -334,8 +441,13 @@ def subpixel_mask(img_in):
 
 
 def luminance(img):
-    lum = np.dot(img, [0.2126, 0.7152, 0.0722])
+    lum = np.dot(img, np.array([0.2126, 0.7152, 0.0722]))
     return np.dstack((lum, lum, lum))
+
+
+def average(img):
+    avg = np.average(img, axis=2)
+    return np.dstack((avg, avg, avg))
 
 
 def tiled_mask(img_in):
@@ -346,7 +458,7 @@ def tiled_mask(img_in):
     else:
         raise AssertionError('Unhandled mask type')
     mask = generate_mask(mask_tile, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3), MASK_TRIADS)
-    # imwrite('mask_resized.png', linear_to_srgb(mask))  # DEBUG
+    imwrite('mask_resized.png', linear_to_srgb(mask))  # DEBUG
     return img_in * ((1 - MASK_AMOUNT) + mask * MASK_AMOUNT)
 
 
@@ -419,35 +531,35 @@ def tone_map(srgb):
 
 
 # For low-pass
-SAMPLES = 907 #2880  #907  #1400
+SAMPLES = 1024 #2880  #907  #1400
 USE_YIQ = False
 GAMMA = 2.4
 # -6dB cutoff is at 1 / 2L in cycles. We want CUTOFF * 53.33e-6 cycles (CUTOFF bandwidth and NTSC standard active line time of 53.33us).
 # CUTOFF = np.array([5.0e6, 0.6e6, 0.6e6])  # Hz
-CUTOFF = np.array([3.2e6, 3.2e6, 3.2e6])  # Hz
+CUTOFF = np.array([4.0e6, 4.0e6, 4.0e6])  # Hz
 Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
 
 # For scanlines, interlacing, and overscan
 OUTPUT_RESOLUTION = (2160, 2880)  #(2160, 2880)  #(800, 1067)  #(720, 960)  #(1080, 1440) #(8640, 11520) (1440, 1920)
-MAX_SPOT_SIZE = 0.85
-MIN_SPOT_SIZE = 0.4
+MAX_SPOT_SIZE = 0.95
+MIN_SPOT_SIZE = 0.3
 INTERLACING = True
 INTERLACING_EVEN = False
 OVERSCAN_HORIZONTAL = 0.0
 OVERSCAN_VERTICAL = 0.0
 
 # For subpixel masks
-MASK_PATTERN = 1  # 0 for 2-pixel (1080p), 1 for 3-pixel (1440p), 2 for 4-pixel (4k)
+MASK_PATTERN = 3  # 0 for 2-pixel (1080p), 1 for 3-pixel (1440p), 2 for 4-pixel (4k), 3 for 5-pixel (4k)
 
 # For tiled masks
-MASK_TYPE = 'slot'  # 'slot' or 'aperture'
-MASK_TRIADS = 600
+MASK_TYPE = 'aperture'  # 'slot' or 'aperture'
+MASK_TRIADS = 500
 MASK_AMOUNT = 1.0
 
 # Diffusion
-BLUR_SIGMA = 0.02
-BLUR_AMOUNT = 0.07  #0.15  #0.13
+BLUR_SIGMA = 0.04
+BLUR_AMOUNT = 0.05  #0.15  #0.13
 
 
 # TODO Clean this up. Parameterize options.
@@ -507,16 +619,33 @@ def simulate(img):
     # box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
     # blurred = box_blur(img_masked, box_radius)
     # blurred = skimage.filters.gaussian(img_masked, sigma=sigma, mode='constant', preserve_range=True, channel_axis=-1)
-    # blurred = gaussian_blur(img_masked, sigma=sigma)
+    blurred = gaussian_blur(img_masked, sigma=sigma)
     #imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
-    # img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
-    img_diffused = img_masked
+    img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
+    # img_diffused = img_masked
 
+    # return tone_map(4*img_diffused)
     return img_diffused
 
-    # To sRGB
-    # print('Color transform and save...')
-    # img_final_srgb = linear_to_srgb(img_diffused)
+
+# TODO Clean this up. Parameterize options.
+def simulate_fast(img):
+    # Read image
+    image_height, image_width, planes = img.shape
+
+    # To CRT gamma
+    #img_crt_gamma = srgb_to_gamma(img, GAMMA)
+    #img_crt_gamma = gamma_to_gamma(img.astype(np.float32) / 255, 2.2, GAMMA)
+    img_crt_gamma = img.astype(np.float32) / 255
+
+    # To linear RGB
+    img_filtered_linear = gamma_to_linear(img_crt_gamma, GAMMA)
+
+    # Mimic CRT spot
+    print('Simulating CRT spot...')
+    img_spot = spot_fast_fragment(img_filtered_linear, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
+
+    return img_spot
 
 
 def main():
