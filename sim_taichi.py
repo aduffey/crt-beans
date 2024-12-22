@@ -239,6 +239,43 @@ def spot_sim_gauss(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.
 
 
 @ti.func
+def spot_sim_gauss4(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
+    # Overscan
+    vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
+
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
+    delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
+
+    upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
+    upper_sample_y2 = upper_sample_y + 1
+    lower_sample_y = upper_sample_y - 1
+    lower_sample_y2 = upper_sample_y - 2
+
+    upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    upper_distance_y2 = (upper_sample_y2 + 0.5) - vTexCoord.y * SourceSize.y
+    lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    lower_distance_y2 = (lower_sample_y2 + 0.5) - vTexCoord.y * SourceSize.y
+
+    output = tm.vec3(0.0)
+    max_sigma = MAX_SPOT_SIZE / (2 * tm.sqrt(2 * tm.log(2)))
+    for sample_x in range(int(tm.round(vTexCoord.x * SourceSize.x - ((3 * max_sigma) / delta))),
+                          int(tm.round(vTexCoord.x * SourceSize.x + ((3 * max_sigma) / delta)))):
+        upper_sample = texelFetch(img, tm.ivec2(sample_x, upper_sample_y))
+        lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
+        third_sample = texelFetch(img, tm.ivec2(sample_x, third_sample_y))
+        distance_x = delta * ((sample_x + 0.5) - vTexCoord.x * SourceSize.x)
+        output += spot_gauss(upper_sample, distance_x, upper_distance_y)
+        output += spot_gauss(lower_sample, distance_x, lower_distance_y)
+        output += spot_gauss(third_sample, distance_x, third_distance_y)
+    output = delta * output
+    # Rescale output so that the maximum value is one.
+    peak = (tm.sqrt(np.pi / 2) * abs(max_sigma)) / (max_sigma * max_sigma) * (1.0 + 2.0 * tm.exp(-1.0 / (2 * max_sigma * max_sigma)))
+    return output / peak
+
+
+@ti.func
 def spot_gauss(sample, distance_x, distance_y):
     width = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     sigma = width / (2 * tm.sqrt(2 * tm.log(2)))
