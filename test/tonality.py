@@ -16,16 +16,20 @@ simulated_means = []
 for val in values:
     img = np.around(np.full((240, 320, 3), val**(1/2.4) * 255)).astype(np.uint8)
     out = sim_taichi.simulate_fast(img)
-    out = np.clip(out, 0.0, 1.0)
+    # out = np.clip(out, 0.0, 1.0)
     # print(val**(1/2.4))  # DEBUG
     # imwrite(f'debug-in-{val}.png', linear_to_srgb(img))  # DEBUG
     # imwrite(f'debug-{val}.png', linear_to_srgb(out))  # DEBUG
     # print(out)  # DEBUG
-    simulated_means.append(np.mean(out))
+    print(np.mean(out, dtype=np.float64))
+    print(np.mean(out, axis=(0,1), dtype=np.float64))
+    simulated_means.append(np.mean(out, axis=(0,1)))
 
 fig, ax = plt.subplots()
 ax.plot(values, values)
-ax.plot(values, simulated_means, 'o-')
+ax.plot(values, [r for (r, g, b) in simulated_means], 'ro-')
+ax.plot(values, [g for (r, g, b) in simulated_means], 'go-')
+ax.plot(values, [b for (r, g, b) in simulated_means], 'bo-')
 ax.set_xscale('log', base=2)
 ax.set_yscale('log', base=2)
 plt.show()

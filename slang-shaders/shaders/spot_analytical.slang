@@ -21,7 +21,7 @@ layout(push_constant) uniform Push {
 #pragma format R16G16B16A16_SFLOAT
 
 #include "parameters_common.inc.slang"
-#include "parameters_sampled.inc.slang"
+#include "parameters_analytical.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -58,12 +58,21 @@ layout(location = 1) flat in float delta;
 layout(location = 2) in vec2 viewportCoord;
 layout(location = 0) out vec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
-layout(binding = 2) uniform sampler2D Filtered;
+layout(binding = 2) uniform sampler2D Linearized;
 
-vec3 spot(vec3 sample_value, vec3 width_rcp, float distance_x, float distance_y) {
-    vec3 x = clamp(abs(distance_x) * width_rcp, 0.0, 1.0);
-    vec3 y = clamp(abs(distance_y) * width_rcp, 0.0, 1.0);
-    return sample_value * width_rcp * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0);
+#define PI 3.1415926535897932384626433832795
+
+vec3 spot_fast(vec3 sample_value, vec3 w_rcp, float x, float x0_, float x1_, float y_) {
+    // We need to be careful that we never get 0.0 as w_rcp so that we don't
+    // end up with NaNs. That means we can't clamp_to_border on the widths or
+    // we'd need to explicitly check for 0.0 here (or fudge it by adding
+    // 1.0e-8 or something).
+    vec3 w = 1.0 / w_rcp;
+    vec3 x0 = clamp(vec3(x0_), x - w, x + w);
+    vec3 x1 = clamp(vec3(x1_), x - w, x + w);
+    vec3 y = clamp(abs(y_) * w_rcp, 0.0, 1.0);
+    return ((y * y) * (2.0 * y - 3.0) + 1.0) * sample_value * w_rcp * w_rcp *
+            (x1 - x0 + (w / PI) * (sin(w_rcp * PI * (x - x0)) - sin(w_rcp * PI * (x - x1))));
 }
 
 vec3 mask(vec3 pixel_value) {
@@ -127,8 +136,8 @@ void main() {
 
     // Check if we should be interlacing. If we are, grab two closest even or
     // odd lines. If we aren't, just grab the two closest lines.
-    if (params.SourceSize.y > 300.0) {  // Interlacing
-        if ((params.FrameCount + (params.OddFieldFirst > 0.5 ? 1u : 0u)) % 2u == 0u) {
+    if (params.SourceSize.y > 300.0 && params.OddFieldFirst != 2.0) {  // Interlacing
+        if ((params.FrameCount + (params.OddFieldFirst == 1.0 ? 1u : 0u)) % 2u == 0u) {
             upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y + 0.25) * 2.0 - 0.5;
         } else {
             upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y - 0.25) * 2.0 + 0.5;
@@ -150,19 +159,21 @@ void main() {
     lower_sample_y *= params.SourceSize.w;
 
     vec3 value = vec3(0.0);
-    float start_x = params.SourceSize.z * (round(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
-    float stop_x = params.SourceSize.z * round(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta));
-    float distance_x = delta * params.SourceSize.x * (start_x - vTexCoord.x);
+    // TODO check bounds
+    float start_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
+    float stop_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta)) + 1.0);
+    float x = vTexCoord.x * params.SourceSize.x * delta;
     for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
-        vec3 upper_sample = textureLod(Filtered, vec2(sample_x, upper_sample_y), 0.0).rgb;
+        vec3 upper_sample = textureLod(Linearized, vec2(sample_x, upper_sample_y), 0.0).rgb;
         vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, upper_sample_y), 0.0).rgb;
-        vec3 lower_sample = textureLod(Filtered, vec2(sample_x, lower_sample_y), 0.0).rgb;
+        vec3 lower_sample = textureLod(Linearized, vec2(sample_x, lower_sample_y), 0.0).rgb;
         vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lower_sample_y), 0.0).rgb;
-        value += spot(upper_sample, upper_width_rcp, distance_x, upper_distance_y);
-        value += spot(lower_sample, lower_width_rcp, distance_x, lower_distance_y);
-        distance_x += delta;
+        float x0 = delta * (params.SourceSize.x * sample_x - 0.5);
+        float x1 = x0 + delta;
+        value += spot_fast(upper_sample, upper_width_rcp, x, x0, x1, upper_distance_y);
+        value += spot_fast(lower_sample, lower_width_rcp, x, x0, x1, lower_distance_y);
     }
-    value = delta * params.MaxSpotSize * value;
+    value = params.MaxSpotSize * 0.5 * value;
 
     if (params.MaskEnabled != 0.0) {
         value = mask(value);
