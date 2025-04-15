@@ -7,8 +7,16 @@ def luminance(img):
     return np.dot(img, [0.2126, 0.7152, 0.0722])
 
 
+def linear_to_srgb(img):
+    """Linear float to sRGB uint8"""
+    img_clipped = np.clip(img, 0.0, 1.0)
+    out = np.where(img_clipped <= 0.0031308, img_clipped * 12.92, 1.055 * (np.power(img_clipped, (1.0 / 2.4))) - 0.055)
+    out = np.around(out * 255).astype(np.uint8)
+    return out
+
+
 def main():
-    values = list(reversed([1.0 / (2**x) for x in range(10)]))
+    values = list(reversed([1.0 / (1.2**x) for x in range(30)]))
     linear_means = []
     piecewise_means = []
     bezier_means = []
@@ -18,6 +26,10 @@ def main():
         linear_means.append(np.mean(linear_masked, axis=(0,1)))
         piecewise_means.append(np.mean(piecewise_masked, axis=(0,1)))
         bezier_means.append(np.mean(bezier_masked, axis=(0,1)))
+        # imwrite(f'original_{val}.png', linear_to_srgb(img))
+        # imwrite(f'linear_{val}.png', linear_to_srgb(linear_masked))
+        # imwrite(f'piecewise_{val}.png', linear_to_srgb(piecewise_masked))
+        # imwrite(f'bezier_{val}.png', linear_to_srgb(bezier_masked))
 
     fig, ax = plt.subplots()
     ax.plot(values, values)
@@ -59,17 +71,18 @@ def mask(img):
     weight = img
     img_masked_linear = img * img + mask_coverage * mask * (1.0 - img) * img
 
-    # Piecewise phase-in. The original image starts phasing in at 1/3 luminance, then linearly up until 1.
+    # Piecewise phase-in. The original image starts phasing in at 1/mask_coverage, then linearly up until 1.
     s = mask_coverage / (mask_coverage - 1)
     weight = np.clip(-s * img + s, 0.0, 1.0)
-    img_masked_piecewise = (1 - weight) * img + mask_coverage * mask * weight * img
+    img_masked_piecewise = (1 - weight) * img + mask_coverage * weight * mask * img
 
-    # Bezier phase-in. Ramps up the mask to higher strength faster than linear but has no discontinuity like piecewise.
+    # Bezier phase-in. Keeps the mask to higher strength longer than linear but has no discontinuity like piecewise.
     s = mask_coverage / (mask_coverage - 1)
     a = -s + 2
     b = s - 3
     weight = a * np.power(img, 3) + b * np.power(img, 2) + 1
-    img_masked_bezier = (1 - weight) * img + mask_coverage * mask * weight * img
+    img_masked_bezier = (1 - weight) * img + mask_coverage * weight * mask * img
+    # mix(mask_coverage * mask * img, img, weight)  ###### XXX
 
     return img_masked_linear, img_masked_piecewise, img_masked_bezier
 

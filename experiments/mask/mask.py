@@ -34,15 +34,15 @@ def max_pixel(img):
 
 def main():
     # Generate a 0.0 -> 1.0 linear gradient
-    grad = np.linspace(0.0, 1.0, OUTPUT_RESOLUTION[0])
+    grad = np.power(np.linspace(0.0, 1.0, OUTPUT_RESOLUTION[0]), 2)
     grad_2d = np.tile(grad, (OUTPUT_RESOLUTION[1], 1))
     grad_rgb = np.dstack((grad_2d, grad_2d, grad_2d))
 
     # BGR mask gives 480 triads per screen width at 1440 pixels and reduces brightness by a factor of 3.
-    mask_tile = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
-    mask_coverage = 3
-    # mask_tile = np.array([[1, 0, 0], [1, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]])  # 4k, lower TVL
-    # mask_coverage = 15 / 6
+    # mask_tile = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+    # mask_coverage = 3
+    mask_tile = np.array([[1, 0, 0], [1, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]])  # 4k, lower TVL
+    mask_coverage = 15 / 6
     mask = np.broadcast_to(mask_tile[np.arange(OUTPUT_RESOLUTION[0]) % mask_tile.shape[0]], (OUTPUT_RESOLUTION[1], OUTPUT_RESOLUTION[0], 3))
 
     # Linear phase-in. The original image starts phasing in immediately, linearly up until 1.

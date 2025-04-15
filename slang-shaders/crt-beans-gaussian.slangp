@@ -24,7 +24,7 @@ mipmap_input2 = false
 scale_type2 = source
 scale2 = 1.0
 
-shader3 = shaders/spot_gaussian_combined.slang
+shader3 = shaders/spot_gaussian.slang
 alias3 = Scanlines
 filter_linear3 = false
 wrap_mode3 = clamp_to_border

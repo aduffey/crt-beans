@@ -13,15 +13,17 @@ layout(push_constant) uniform Push {
     float OddFieldFirst;
     float OverscanHorizontal;
     float OverscanVertical;
-    float MaskEnabled;
+    float MaskType;
     float SubpixelMaskPattern;
     float SubpixelPattern;
+    float DynamicMaskTriads;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
 
 #include "parameters_common.inc.slang"
 #include "parameters_sampled.inc.slang"
+#include "mask.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -54,7 +56,7 @@ void main() {
     // truncate the gaussian in the fragment shader, as well as find the peak
     // value below.
     // 2 * sqrt(2 * log(2)) * sigma = full width at half maximum of a gaussian.
-    maxSigma = params.MaxSpotSize / (2 * sqrt(2 * log(2)));  // TODO constant?
+    maxSigma = params.MaxSpotSize / (2 * sqrt(2 * log(2))); // TODO constant?
 
     // We want to rescale the output so that the maximum value is one.
     // This should be the maximum value of four overlapping gaussian scanlines
@@ -76,10 +78,9 @@ void main() {
             (2.0 * exp(3.0 / (2.0 * maxSigma * maxSigma)) + exp(2.0 / (maxSigma * maxSigma)) + 1.0);
     scaleFactor = 1.0 / scaleFactor;
 
-    // The pixel values of the viewport coord (*not* processed for overscan).
-    // These should get interpolated as floats with no decimal portion (i.e.
-    // integers).
-    viewportCoord = floor(TexCoord * params.OutputSize.xy);
+    // The viewport coordinates (*not* processed for overscan).
+    // We need this for the mask.
+    viewportCoord = TexCoord;
 }
 
 #pragma stage fragment
@@ -98,88 +99,45 @@ vec3 spot(vec3 sample_value, vec3 sigma_rcp, float distance_x, float distance_y)
     return sample_value * sigma_rcp * exp(-(distance_x * distance_x + distance_y * distance_y) * sigma_rcp);
 }
 
-vec3 mask(vec3 pixel_value) {
-    // We want to use viewportCoord here, not vTexCoord, which is processed
-    // for overscan.
-    vec3 mask = vec3(1.0);
-    float mask_coverage = 1.0;
-    if (params.SubpixelPattern == 0.0) {  // RGB subpixels
-        if (params.SubpixelMaskPattern == 2.0) {  // <=1080p
-            vec3[2] mask_tile = { vec3(1.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 2.0))];
-            mask_coverage = 2.0;
-        } else if (params.SubpixelMaskPattern == 3.0) {  // 1080p/1440p
-            vec3[3] mask_tile = { vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 3.0))];
-            mask_coverage = 3.0;
-        } else if (params.SubpixelMaskPattern == 4.0) {  // 1440p/4k
-            vec3[4] mask_tile = { vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), vec3(0.0, 1.0, 1.0), vec3(0.0, 0.0, 1.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 4.0))];
-            mask_coverage = 2.0;
-        } else if (params.SubpixelMaskPattern == 5.0) {  // 4k, lower TVL
-            vec3[5] mask_tile = { vec3(1.0, 0.0, 0.0), vec3(1.0, 0.0, 1.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 5.0))];
-            mask_coverage = 15.0 / 6.0;
-        }
-    } else {  // BGR subpixels, same as above but red and blue values transposed
-        if (params.SubpixelMaskPattern == 2.0) {  // <=1080p
-            vec3[2] mask_tile = { vec3(1.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 2.0))];
-            mask_coverage = 2.0;
-        } else if (params.SubpixelMaskPattern == 3.0) {  // 1080p/1440p
-            vec3[3] mask_tile = { vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 3.0))];
-            mask_coverage = 3.0;
-        } else if (params.SubpixelMaskPattern == 4.0) {  // 1440p/4k
-            vec3[4] mask_tile = { vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 4.0))];
-            mask_coverage = 2.0;
-        } else if (params.SubpixelMaskPattern == 5.0) {  // 4k, lower TVL
-            vec3[5] mask_tile = { vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0) };
-            mask = mask_tile[int(mod(viewportCoord.x, 5.0))];
-            mask_coverage = 15.0 / 6.0;
-        }
-    }
-
-    // Cubic phase-in. Keeps the mask strength higher for longer than linear
-    // but has no discontinuity like piecewise.
-    float s = mask_coverage / (mask_coverage - 1.0);
-    float a = -s + 2.0;
-    float b = s - 3.0;
-    vec3 weight = a * (pixel_value * pixel_value * pixel_value) + b * (pixel_value * pixel_value) + 1.0;
-    return pixel_value - pixel_value * weight * (1.0 - mask_coverage * mask);
-}
-
 void main() {
     // Sample locations in Source texel space: [0, SourceSize.y), snapped to the
     // middle of a texel.
     float upper1_sample_y, upper2_sample_y;
     // Distance units are *scanlines heights*.
     float upper1_distance_y, upper2_distance_y;
+    float lower1_sample_y, lower2_sample_y;
+    float lower1_distance_y, lower2_distance_y;
 
     // Check if we should be interlacing. If we are, grab two upper even or
     // odd lines. If we aren't, just grab the two upper lines.
-    if (params.SourceSize.y > 300.0) {  // Interlacing
+    if (params.SourceSize.y > 300.0) { // Interlacing
         if ((params.FrameCount + (params.OddFieldFirst > 0.5 ? 1u : 0u)) % 2u == 0u) {
             upper1_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y + 0.25) * 2.0 - 0.5;
         } else {
             upper1_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y - 0.25) * 2.0 + 0.5;
         }
         upper2_sample_y = upper1_sample_y + 1.0;
+        lower1_sample_y = upper1_sample_y - 1.0;
+        lower2_sample_y = upper1_sample_y - 2.0;
         // TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
         upper1_distance_y = 0.5 * (upper1_sample_y - vTexCoord.y * params.SourceSize.y);
-        upper2_distance_y = upper1_distance_y + 1.0;
-    } else {  // No interlacing
+    } else { // No interlacing
         upper1_sample_y = round(vTexCoord.y * params.SourceSize.y) + 0.5;
         upper2_sample_y = upper1_sample_y + 1.0;
+        lower1_sample_y = upper1_sample_y - 1.0;
+        lower2_sample_y = upper1_sample_y - 2.0;
         upper1_distance_y = upper1_sample_y - vTexCoord.y * params.SourceSize.y;
-        upper2_distance_y = upper1_distance_y + 1.0;
     }
+    upper2_distance_y = upper1_distance_y + 1.0;
+    lower1_distance_y = upper1_distance_y - 1.0;
+    lower2_distance_y = lower1_distance_y - 1.0;
 
     // Transform *_sample_y into [0,1] coordinate space. We need them for the
     // texture sampling below.
     upper1_sample_y *= params.SourceSize.w;
     upper2_sample_y *= params.SourceSize.w;
+    lower1_sample_y *= params.SourceSize.w;
+    lower2_sample_y *= params.SourceSize.w;
 
     vec3 value = vec3(0.0);
     float start_x = params.SourceSize.z * (round(vTexCoord.x * params.SourceSize.x - (3.0 * maxSigma / delta)) + 0.5);
@@ -192,29 +150,6 @@ void main() {
         vec3 upper2_sigma_rcp = textureLod(Source, vec2(sample_x, upper2_sample_y), 0.0).rgb;
         value += spot(upper1_sample, upper1_sigma_rcp, distance_x, upper1_distance_y);
         value += spot(upper2_sample, upper2_sigma_rcp, distance_x, upper2_distance_y);
-        distance_x += delta;
-    }
-
-    // Second set of scanlines. Do essentially the same thing as above, but for
-    // the lower two scanlines. By splitting this into two sets of two
-    // scanlines, we can reduce register usage (increasing occupancy) and get
-    // better cache hit ratios. The tradeoff is slightly higher ALU usage as we
-    // iterate through the loop again.
-    float lower1_sample_y, lower2_sample_y;
-    float lower1_distance_y, lower2_distance_y;
-
-    if (params.SourceSize.y > 300.0) {  // Interlacing
-        lower1_sample_y = upper1_sample_y - 2.0 * params.SourceSize.w;
-        lower2_sample_y = lower1_sample_y - 2.0 * params.SourceSize.w;
-    } else {  // No interlacing
-        lower1_sample_y = upper1_sample_y - 1.0 * params.SourceSize.w ;
-        lower2_sample_y = lower1_sample_y - 1.0 * params.SourceSize.w;
-    }
-    lower1_distance_y = upper1_distance_y - 1.0;
-    lower2_distance_y = lower1_distance_y - 1.0;
-
-    distance_x = delta * params.SourceSize.x * (start_x - vTexCoord.x);
-    for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
         vec3 lower1_sample = textureLod(Filtered, vec2(sample_x, lower1_sample_y), 0.0).rgb;
         vec3 lower1_sigma_rcp = textureLod(Source, vec2(sample_x, lower1_sample_y), 0.0).rgb;
         vec3 lower2_sample = textureLod(Filtered, vec2(sample_x, lower2_sample_y), 0.0).rgb;
@@ -225,9 +160,13 @@ void main() {
     }
     value = delta * scaleFactor * value;
 
-    if (params.MaskEnabled != 0.0) {
-        value = mask(value);
-    }
+    if (params.MaskType == 1.0) {
+        vec4 mask = subpixel_aperture_grille(viewportCoord, params.OutputSize, params.SubpixelPattern, params.SubpixelMaskPattern);
+        value = blend_mask(mask.rgb, value, mask.a);
+    } else if (params.MaskType == 2.0) {
+        vec4 mask = dynamic_aperture_grille(viewportCoord, params.OutputSize, params.DynamicMaskTriads);
+        value = blend_mask(mask.rgb, value, mask.a);
+    } // Otherwise, no mask
 
     FragColor.rgb = value;
 }

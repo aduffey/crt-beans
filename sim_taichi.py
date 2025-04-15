@@ -1,10 +1,7 @@
 from imageio.v3 import imwrite, imread
 import numpy as np
-import skimage
 import argparse
-import multiprocessing as mp
 import functools
-from PIL import Image, ImageFilter
 import taichi as ti
 import taichi.math as tm
 
@@ -25,7 +22,7 @@ def gamma_to_gamma(img, in_gamma, out_gamma):
 
 
 def gamma_to_yiq(img):
-    """sRGB uint8 to YIQ float"""
+    """Native gamma to YIQ float"""
     rgb2yiq = np.array([[0.30, 0.59, 0.11],
                         [0.599, -0.2773, -0.3217],
                         [0.213, -0.5251, 0.3121]])
@@ -107,7 +104,7 @@ def taichi_filter_fragment(field_in: ti.template(), field_out: ti.template()):
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
     for y, x in field_out:
         vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
-        field_out[y, x] = filter_sim(vTexCoord, field_in, SourceSize)
+        field_out[y, x] = filter_sim2(vTexCoord, field_in, SourceSize)
     return
 
 
@@ -130,6 +127,35 @@ def filter_sim(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4) -> tm.vec3:
         filtered += 0.5 * s * L_rcp * (t1 - t0 + (L / np.pi) *
                                        (tm.sin(L_rcp * ((np.pi * t) - np.pi * t0)) - tm.sin(L_rcp * ((np.pi * t) - np.pi * t1))))
     return filtered
+
+
+@ti.func
+def filter_sim2(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4) -> tm.vec3:
+    max_L = tm.max(tm.max(L.r, L.g), L.b)
+
+    filtered = tm.vec3(0.0)
+    pix_y = int(tm.floor(vTexCoord.y * SourceSize.y))
+    t = vTexCoord.x
+
+    # Set up loop bounds
+    start = int(tm.floor(SourceSize.x * (vTexCoord.x - max_L)))
+    end = int(tm.floor(SourceSize.x * (vTexCoord.x + max_L))) + 1
+
+    # Set up the first common term for the left. The right side of the integral
+    # for iteration i is the left side of the integral for iteration i + 1, so
+    # we can avoid computing the term twice.
+    t0 = start * SourceSize.z
+    u0 = tm.clamp((t - t0) / L, -1.0, 1.0)
+    left = np.pi * u0 + tm.sin(np.pi * u0)
+    for pix_x in range(start, end):
+        # Integral of s / L * (0.5 + 0.5 * cos(PI * (t - t_x) / L)) dt_x over t0 to t1
+        s = texelFetch(Source, tm.ivec2(pix_x, pix_y))
+        t1 = (pix_x + 1) * SourceSize.z
+        u1 = tm.clamp((t - t1) / L, -1.0, 1.0)
+        right = np.pi * u1 + tm.sin(np.pi * u1)
+        filtered += s * (left - right)
+        left = right
+    return filtered / (np.pi * 2.0)
 
 
 def spot_fragment(image_in, output_dim):
@@ -372,19 +398,31 @@ def spot_sim_fast(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.v
         lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
         x0 = delta * sample_x
         x1 = x0 + delta
-        output += spot_fast(upper_sample, x, x0, x1, upper_distance_y)
-        output += spot_fast(lower_sample, x, x0, x1, lower_distance_y)
+        output += spot_fast2(upper_sample, x, x0, x1, upper_distance_y)
+        output += spot_fast2(lower_sample, x, x0, x1, lower_distance_y)
     return output
 
 
 @ti.func
 def spot_fast(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
     w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
-    x0 = tm.clamp(x0_, x - w, x + w)
-    x1 = tm.clamp(x1_, x - w, x + w)
+    x0 = tm.clamp((x - x0_) / w, -1.0, 1.0)
+    x1 = tm.clamp((x - x1_) / w, -1.0, 1.0)
     y = tm.clamp(abs(y_) / w, 0.0, 1.0)
-    return MAX_SPOT_SIZE * 0.5 * (0.5 * tm.cos(np.pi * y) + 0.5) * sample * 1.0 / w**2 * \
-            (x1 - x0 + (w / np.pi) * (tm.sin(1.0 / w * ((np.pi * x) - np.pi * x0)) - tm.sin(1.0 / w * ((np.pi * x) - np.pi * x1))))
+    return MAX_SPOT_SIZE / (2.0 * np.pi) * sample * 1.0 / w * (0.5 * tm.cos(np.pi * y) + 0.5) * \
+        (np.pi * x0 + tm.sin(np.pi * x0) - np.pi * x1 - tm.sin(np.pi * x1))
+
+
+@ti.func
+def spot_fast2(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
+    w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x0 = tm.clamp((x - x0_) / w, -1.0, 1.0)
+    x1 = tm.clamp((x - x1_) / w, -1.0, 1.0)
+    y = tm.clamp(abs(y_) / w, 0.0, 1.0)
+    return MAX_SPOT_SIZE * sample * 1.0 / w * ((y * y) * (2.0 * y - 3.0) + 1.0) * (
+        ((x0 * x0) * (tm.sign(x0) * 0.5 * (x0 * x0) - x0) + x0) -
+        ((x1 * x1) * (tm.sign(x1) * 0.5 * (x1 * x1) - x1) + x1)
+    )
 
 
 f16vec3 = ti.types.vector(3, ti.f16)
@@ -526,11 +564,282 @@ def subpixel_mask(img_in):
 
     # Cubic phase-in. Keeps the mask strength higher for longer than linear
     # but has no discontinuity like piecewise.
-    s = mask_coverage / (mask_coverage - 1);
+    a = np.clip((img_in - 1) / (1 - mask_coverage), 0, img_in)
+    b = np.clip((1 - mask_coverage * img_in) / (1 - mask_coverage), 0, img_in)
+    return mask_coverage * a * mask + b
+
+
+def coverage_mask(image_in):
+    (in_height, in_width, in_planes) = image_in.shape
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    coverage_mask_fragment(field_in, field_out)
+    return field_out.to_numpy()
+
+
+@ti.kernel
+def coverage_mask_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = coverage_mask_taichi(vTexCoord, field_in, SourceSize, OutputSize)
+    return
+
+
+@ti.func
+def coverage_mask_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4):
+    mask_coverage = 3.0
+
+    # Working in [0, MASK_TRIADS + 1) coordinate space to find the phosphor edges.
+    x = vTexCoord.x * MASK_TRIADS
+    phosphor_left_edge = tm.floor(x + tm.vec3(1.0 / 3.0, 0.0, -1.0 / 3.0)) + tm.vec3(0.0, 1.0 / 3.0, 2.0 / 3.0)
+    # Working in [0, OutputSize.x + 1) coordinate space for the coverage.
+    x = vTexCoord.x * OutputSize.x
+    phosphor_left_edge = phosphor_left_edge / MASK_TRIADS * OutputSize.x
+    phosphor_right_edge = phosphor_left_edge + OutputSize.x / MASK_TRIADS / 3.0 # ?? correct ??
+    mask = tm.clamp(min(x + 0.5, phosphor_right_edge) - max(x - 0.5, phosphor_left_edge), 0.0, 1.0)
+
+    pixel_coords = tm.ivec2(int(vTexCoord.x * SourceSize.x), int(vTexCoord.y * SourceSize.y))
+    pixel_value = texelFetch(Source, pixel_coords)
+
+    # Cubic phase-in. Keeps the mask strength higher for longer than linear
+    # but has no discontinuity like piecewise.
+    s = mask_coverage / (mask_coverage - 1.0);
     a = -s + 2.0;
     b = s - 3.0;
-    weight = a * np.power(img_in, 3.0) + b * np.power(img_in, 2.0) + 1.0;
-    return img_in * ((1 - weight) + mask_coverage * mask * weight);
+    weight = a * (pixel_value * pixel_value * pixel_value) + b * (pixel_value * pixel_value) + 1.0;
+    return pixel_value - pixel_value * weight * (1.0 - mask_coverage * mask);
+
+
+def bandlimit_mask(image_in):
+    (in_height, in_width, in_planes) = image_in.shape
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    bandlimit_mask_fragment(field_in, field_out)
+    return field_out.to_numpy()
+
+
+@ti.kernel
+def bandlimit_mask_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = bandlimit_mask_taichi2(vTexCoord, field_in, SourceSize, OutputSize)
+    return
+
+
+phosphors = ti.Vector.field(n=3, dtype=float, shape=3)
+phosphors[0] = tm.vec3(1.0, 0.0, 0.0)
+phosphors[1] = tm.vec3(0.0, 1.0, 0.0)
+phosphors[2] = tm.vec3(0.0, 0.0, 1.0)
+
+
+@ti.func
+def bandlimit_mask_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4):
+    w = (MASK_TRIADS * 3.0) / OutputSize.x
+    x = MASK_TRIADS * 3.0 * vTexCoord.x
+    mask = tm.vec3(0.0)
+    for offset in range(-2, 3):
+        x0 = tm.floor(x) + offset
+        x1 = tm.ceil(x) + offset
+        x0 = tm.clamp((x - x0) / w, -1.0, 1.0)
+        x1 = tm.clamp((x - x1) / w, -1.0, 1.0)
+        weight = np.pi * x0 + tm.sin(np.pi * x0) - np.pi * x1 - tm.sin(np.pi * x1)
+        # weight = tm.sin(np.pi / 2.0 * x0) - tm.sin(np.pi / 2.0 * x1)  # For filter kernel pi / 4 * cos(pi / 2 * x)
+        if vTexCoord.x < 0.01 and vTexCoord.y * OutputSize.y < 1:
+            print(w, weight)
+        # print((int(MASK_TRIADS * 3.0 * vTexCoord.x) + offset) % 3)
+        mask += weight * phosphors[(int(x) + offset) % 3]
+    mask /= 2 * np.pi
+    # mask /= 2  # For filter kernel pi / 4 * cos(pi / 2 * x)
+    if vTexCoord.x < 0.01 and vTexCoord.y * OutputSize.y < 1:
+        print(mask)
+
+    pixel_coords = tm.ivec2(int(vTexCoord.x * SourceSize.x), int(vTexCoord.y * SourceSize.y))
+    pixel_value = texelFetch(Source, pixel_coords)
+
+    mask_coverage = 3.0
+
+    # Cubic phase-in. Keeps the mask strength higher for longer than linear
+    # but has no discontinuity like piecewise.
+    s = mask_coverage / (mask_coverage - 1.0)
+    a = -s + 2.0
+    b = s - 3.0
+    weight = a * (pixel_value * pixel_value * pixel_value) + b * (pixel_value * pixel_value) + 1.
+    return pixel_value - pixel_value * weight * (1.0 - mask_coverage * mask)
+
+
+@ti.func
+def bandlimit_mask_taichi2(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4):
+    # With unrolled loops and common terms collapsed for performance
+    w = (MASK_TRIADS * 3.0) / OutputSize.x
+    x = MASK_TRIADS * 3.0 * vTexCoord.x
+    mask = tm.vec3(0.0)
+    if w < 0.5:
+        x1 = tm.clamp((x - tm.round(x)) / w, -1.0, 1.0)
+        p0 = phosphors[int(tm.round(x) - 1.0) % 3]
+        p1 = phosphors[int(tm.round(x)) % 3]
+        mask = np.pi * (p0 + p1) + (p1 - p0) * (np.pi * x1 + tm.sin(np.pi * x1))
+        mask /= 2.0 * np.pi
+    elif w < 1.0:
+        x1 = tm.clamp((x - tm.floor(x)) / w, -1.0, 1.0)
+        x2 = tm.clamp((x - (tm.floor(x) + 1.0)) / w, -1.0, 1.0)
+        p0 = phosphors[int(tm.floor(x) - 1.0) % 3]
+        p1 = phosphors[int(tm.floor(x)) % 3]
+        p2 = phosphors[int(tm.floor(x) + 1.0) % 3]
+        mask = np.pi * (p0 + p2) + \
+            (p1 - p0) * (np.pi * x1 + tm.sin(np.pi * x1)) + \
+            (p2 - p1) * (np.pi * x2 + tm.sin(np.pi * x2))
+        mask /= 2.0 * np.pi
+    else:  # w < 1.5
+        x1 = tm.clamp((x - (tm.round(x) - 1.0)) / w, -1.0, 1.0)
+        x2 = tm.clamp((x - tm.round(x)) / w, -1.0, 1.0)
+        x3 = tm.clamp((x - (tm.round(x) + 1.0)) / w, -1.0, 1.0)
+        p0 = phosphors[int(tm.round(x) - 2.0) % 3]
+        p1 = phosphors[int(tm.round(x) - 1.0) % 3]
+        p2 = phosphors[int(tm.round(x)) % 3]
+        p3 = phosphors[int(tm.round(x) + 1.0) % 3]
+        mask = np.pi * (p0 + p3) + \
+            (p1 - p0) * (np.pi * x1 + tm.sin(np.pi * x1)) + \
+            (p2 - p1) * (np.pi * x2 + tm.sin(np.pi * x2)) + \
+            (p3 - p2) * (np.pi * x3 + tm.sin(np.pi * x3))
+        mask /= 2.0 * np.pi
+
+    if mask.x < 0 or mask.x > 1 or mask.y < 0 or mask.y > 1 or mask.z < 0 or mask.z > 1:
+        print(mask)
+
+    pixel_coords = tm.ivec2(int(vTexCoord.x * SourceSize.x), int(vTexCoord.y * SourceSize.y))
+    pixel_value = texelFetch(Source, pixel_coords)
+
+    mask_coverage = 3.0
+
+    a = tm.clamp((pixel_value - 1) / (1 - mask_coverage), 0, pixel_value)
+    b = tm.clamp((1 - mask_coverage * pixel_value) / (1 - mask_coverage), 0, pixel_value)
+    return mask_coverage * a * mask + b
+
+    # # Cubic phase-in. Keeps the mask strength higher for longer than linear
+    # # but has no discontinuity like piecewise.
+    # return pixel_value * pixel_value + mask_coverage * mask * (1.0 - pixel_value) * pixel_value  # XXX
+    # s = mask_coverage / (mask_coverage - 1.0)
+    # a = -s + 2.0
+    # b = s - 3.0
+    # weight = a * (pixel_value * pixel_value * pixel_value) + b * (pixel_value * pixel_value) + 1.0
+    # return pixel_value - pixel_value * weight * (1.0 - mask_coverage * mask)
+
+
+def additive_mask(image_in):
+    (in_height, in_width, in_planes) = image_in.shape
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    additive_mask_fragment(field_in, field_out)
+    return field_out.to_numpy()
+
+
+@ti.kernel
+def additive_mask_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = additive_mask_taichi(vTexCoord, field_in, SourceSize, OutputSize)
+    return
+
+
+@ti.func
+def additive_mask_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4):
+    offset = tm.vec3(0.0, -1 / (3 * MASK_TRIADS), -2 / (3 * MASK_TRIADS))
+    half = OutputSize.z * 0.5
+    x = vTexCoord.x
+    mask = tm.vec3(1.0, 1.0, 1.0)
+    mask_coverage = 1.0
+    if MASK_TRIADS * 4 < OutputSize.x:  # XXX
+        # mask = 1 / 3 + \
+        #     2 / np.pi * tm.sin(np.pi / 3) * tm.cos(2 * np.pi * MASK_TRIADS * (x + offset)) + \
+        #     1 / np.pi * tm.sin((2 / 3) * np.pi) * tm.cos(4 * np.pi * MASK_TRIADS * (x + offset))
+
+        # mask = 1 / 3 + \
+        #     0.5513288954217920 * tm.sin(2 * np.pi * MASK_TRIADS * (x + offset)) + \
+        #     0.2756644477108960 * tm.sin(4 * np.pi * MASK_TRIADS * (x + offset))
+        # mask = (mask + 0.080163) / 1.24049
+
+        # mask = 1.0 / 3.0 * OutputSize.z + 0.5513288954217920 * \
+        #         (tm.sin(2 * np.pi * MASK_TRIADS * (x + offset + half)) - \
+        #         tm.sin(2 * np.pi * MASK_TRIADS * (x + offset - half))) / (2 * np.pi * MASK_TRIADS) + \
+        #         0.2756644477108960 * (tm.sin(4 * np.pi * MASK_TRIADS * (x + offset + half)) - \
+        #         tm.sin(4 * np.pi * MASK_TRIADS * (x + offset - half))) / (4 * np.pi * MASK_TRIADS)
+        # mask /= OutputSize.z
+
+        # Area under offset
+        mask = (1.0 / 3.0 + 0.080163) * OutputSize.z
+        # Area under first harmonic
+        right = tm.sin(2 * np.pi * MASK_TRIADS * (x + offset + half))
+        left = tm.sin(2 * np.pi * MASK_TRIADS * (x + offset - half))
+        mask += 0.5513288954217920 * (right - left) / (2 * np.pi * MASK_TRIADS)
+        # Area under second harmonic
+        right = tm.sin(4 * np.pi * MASK_TRIADS * (x + offset + half))
+        left = tm.sin(4 * np.pi * MASK_TRIADS * (x + offset - half))
+        mask += 0.2756644477108960 * (right - left) / (4 * np.pi * MASK_TRIADS)
+        mask /= (1.24049 * OutputSize.z)
+
+        mask_coverage = 3
+        # mask_coverage = 1 / (1 / 3 + 0.080163)
+    elif MASK_TRIADS * 2 < OutputSize.x:
+        # mask = 0.5 + 0.5 * tm.cos(2 * np.pi * MASK_TRIADS * (x + offset))
+        mask = 0.5 * OutputSize.z + 0.5 * \
+                (tm.sin(2 * np.pi * MASK_TRIADS * (x + offset + half)) - \
+                tm.sin(2 * np.pi * MASK_TRIADS * (x + offset - half))) / (2 * np.pi * MASK_TRIADS)
+        # mask = 1 / 3 + \
+        #     0.5513288954217920 * tm.cos(2 * np.pi * MASK_TRIADS * (x + offset))
+        # mask = 1.0 / 3.0 * OutputSize.z + 0.5513288954217920 * \
+        #         (tm.sin(2 * np.pi * MASK_TRIADS * (x + offset + half)) - \
+        #         tm.sin(2 * np.pi * MASK_TRIADS * (x + offset - half))) / (2 * np.pi * MASK_TRIADS)
+        mask /= OutputSize.z
+        mask_coverage = 2
+
+    if vTexCoord.x < 0.01 and vTexCoord.y * OutputSize.y < 1:
+        print(x + offset + half, (x + offset - half))
+        print(tm.sin(2 * np.pi * MASK_TRIADS * (x + offset + half)) - tm.sin(2 * np.pi * MASK_TRIADS * (x + offset - half)),
+            tm.sin(4 * np.pi * MASK_TRIADS * (x + offset + half)) - tm.sin(4 * np.pi * MASK_TRIADS * (x + offset - half)))
+        print(mask, mask.x + mask.y + mask.z)
+
+    pixel_coords = tm.ivec2(int(vTexCoord.x * SourceSize.x), int(vTexCoord.y * SourceSize.y))
+    pixel_value = texelFetch(Source, pixel_coords)
+
+    a = tm.clamp((pixel_value - 1) / (1 - mask_coverage), 0, pixel_value)
+    b = tm.clamp((1 - mask_coverage * pixel_value) / (1 - mask_coverage), 0, pixel_value)
+    return mask_coverage * a * mask + b
+    # # return mask * pixel_value
+    # #
+    # return pixel_value * pixel_value + mask_coverage * mask * (1.0 - pixel_value) * pixel_value
+    # #
+    # s = mask_coverage / (mask_coverage - 1)
+    # weight = tm.clamp(-s * pixel_value + s, 0.0, 1.0)
+    # return (1.0 - weight) * pixel_value + mask_coverage * mask * weight * pixel_value
+
+    # # Cubic phase-in. Keeps the mask strength higher for longer than linear
+    # # but has no discontinuity like piecewise.
+    # s = mask_coverage / (mask_coverage - 1.0)
+    # a = -s + 2.0
+    # b = s - 3.0
+    # weight = a * (pixel_value * pixel_value * pixel_value) + b * (pixel_value * pixel_value) + 1.0
+    # return pixel_value - pixel_value * weight * (1.0 - mask_coverage * mask)
+
+
+@ti.func
+def smoothstep(edge0: tm.vec3, edge1: tm.vec3, x: float):
+    t= tm.clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
 def tiled_mask(img_in):
@@ -632,7 +941,7 @@ Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
 
 # For scanlines, interlacing, and overscan
-OUTPUT_RESOLUTION = (2160, 2880)  #(8640, 11520) (2160, 2880) (1440, 1920) (1080, 1440) (800, 1067) (720, 960)
+OUTPUT_RESOLUTION = (2160, 2864)  #(8640, 11520) (2160, 2880) (1440, 1920) (1080, 1440) (800, 1067) (720, 960)
 MAX_SPOT_SIZE = 0.9
 MIN_SPOT_SIZE = 0.4
 OVERSCAN_HORIZONTAL = 0.0
@@ -698,8 +1007,11 @@ def simulate(img):
 
     # Mask
     print('Masking...')
-    img_masked = tiled_mask(img_spot)
+    # img_masked = tiled_mask(img_spot)
     # img_masked = subpixel_mask(img_spot)
+    # img_masked = coverage_mask(img_spot)
+    # img_masked = bandlimit_mask(img_spot)
+    img_masked = additive_mask(img_spot)
     # img_masked = img_spot
 
     # Diffusion
@@ -707,7 +1019,6 @@ def simulate(img):
     sigma = BLUR_SIGMA * OUTPUT_RESOLUTION[0]
     # box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
     # blurred = box_blur(img_masked, box_radius)
-    # blurred = skimage.filters.gaussian(img_masked, sigma=sigma, mode='constant', preserve_range=True, channel_axis=-1)
     blurred = gaussian_blur(img_masked, sigma=sigma)
     #imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
     img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
