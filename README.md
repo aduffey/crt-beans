@@ -19,5 +19,5 @@ Currently, supported features include:
 * Configurable overscan cropping.
 * "Glow" simulation, recreating the glowing areas around bright parts of the screen caused by the scattering of light in the glass.
 * Interlacing support in the Slang shaders.
-* Limited support for masks in the Taichi simulation only.
+* Support for aperture gille masks, either with predefined subpixel layouts or dynamically generated.
 * The Slang shaders have been tested to run in 4k at 60 FPS on a Ryzen 7000 integrated GPU in their default configuration. _Performance is a feature!_
