@@ -14,7 +14,7 @@ def linear_to_srgb(img):
 values = list(reversed([1.0 / (2**x) for x in range(10)]))
 simulated_means = []
 for val in values:
-    img = np.around(np.full((240, 320, 3), val**(1/2.4) * 255)).astype(np.uint8)
+    img = np.full((240, 256, 3), val**(1/2.4)).astype(np.float32)
     out = sim_taichi.simulate_fast(img)
     # out = np.clip(out, 0.0, 1.0)
     # print(val**(1/2.4))  # DEBUG

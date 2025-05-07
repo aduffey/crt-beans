@@ -1,5 +1,17 @@
 shaders = 12
 
+textures = BlueNoiseTex
+
+// Blue noise texture from https://github.com/Calinou/free-blue-noise-textures
+// (Licensed CC0)
+// This is used for dithering.
+// It is expected (in composite_output.slang) that this texture is 64x64. Using
+// a different size will require changes to that file.
+BlueNoiseTex = shaders/blue_noise.png
+BlueNoiseTex_wrap_mode = repeat
+BlueNoiseTex_linear = true
+BlueNoiseTex_mipmap = false
+
 //======== Transform color space if necessary.
 shader0 = shaders/transform.slang
 mipmap_input0 = false

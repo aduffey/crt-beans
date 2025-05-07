@@ -1,11 +1,18 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform UBO {
+layout(set = 0, binding = 0, std140) uniform UBO {
     mat4 MVP;
 };
 
-// #pragma format R8G8B8A8_SRGB
+layout(push_constant) uniform Push {
+    vec4 OutputSize;
+    float MaskType;
+    float DynamicMaskTriads;
+} params;
+
 #pragma format R16G16B16A16_SFLOAT
+
+#include "parameters_common.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -20,8 +27,9 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(set = 0, binding = 2) uniform sampler2D Source;
 
 void main() {
-    FragColor.rgb = texture(Source, vTexCoord).rgb;
+    if (params.MaskType == 2.0) {
+        FragColor = dynamic_aperture_grille(vTexCoord, params.OutputSize, params.DynamicMaskTriads);
+    }
 }

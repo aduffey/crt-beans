@@ -135,11 +135,10 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
 vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
     // Loops are unrolled and common terms collapsed for performance.
     const vec3[3] phosphors = {
-            vec3(1.0, 0.0, 0.0),
-            vec3(0.0, 1.0, 0.0),
-            vec3(0.0, 0.0, 1.0)
-        };
-
+        vec3(1.0, 0.0, 0.0),
+        vec3(0.0, 1.0, 0.0),
+        vec3(0.0, 0.0, 1.0)
+    };
     // All units are in terms of phosphors (i.e. 1 == phosphor width).
     // Set the kernel radius to be one output pixel wide.
     float kernel_radius = 3.0 * mask_triads * output_size.z;

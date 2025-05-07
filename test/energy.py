@@ -14,16 +14,16 @@ def linear_to_srgb(img):
 
 def gamma_to_linear(img):
     """Simple gamma uint8 to linear float"""
-    img_float = img.astype(np.float32) / 255
-    return np.power(np.clip(img_float, 0.0, 1.0), 2.4)
+    return np.power(np.clip(img, 0.0, 1.0), 2.4)
 
 filename = sys.argv[1]
-img_original = imread(sys.argv[1])
+img_original = imread(sys.argv[1]).astype(np.float32) / 255
 img_original_linear = gamma_to_linear(img_original)
 
-print('Analytic ===')
 print('Original: {}'.format(np.mean(img_original_linear, axis=(0,1), dtype=np.float64)))
-img_out = sim_taichi.simulate_fast(img_original)
+img_out = sim_taichi.simulate_analytical(img_original)
 print('Analytic: {}'.format(np.mean(img_out, axis=(0,1), dtype=np.float64)))
+img_out = sim_taichi.simulate_fast(img_original)
+print('Fast: {}'.format(np.mean(img_out, axis=(0,1), dtype=np.float64)))
 img_out = sim_taichi.simulate(img_original)
 print('Sampled: {}'.format(np.mean(img_out, axis=(0,1), dtype=np.float64)))

@@ -24,6 +24,7 @@ layout(push_constant) uniform Push {
 #include "parameters_common.inc.slang"
 #include "parameters_analytical.inc.slang"
 #include "mask.inc.slang"
+#include "line_handling.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -95,64 +96,70 @@ vec3 spot_integral(vec3 sample_value, vec3 w_rcp, float x, float x0, float x1, f
         (PI * edge0 + sin(PI * edge0) - PI * edge1 - sin(PI * edge1));
 }
 
+// sign(x) * 0.5 requires ~5 instructions because it needs to account for edge
+// cases (0.0 and -0.0, etc) and multiply. This is 2 instructions.
+vec3 fast_sign(vec3 val) {
+    return vec3(val.r < 0.0 ? -0.5 : 0.5, val.g < 0.0 ? -0.5 : 0.5, val.b < 0.0 ? -0.5 : 0.5);
+}
+
+// This is basically the same as the above function, but with using the cubic
+// function as the horizontal component. This avoids the sin() calls, which may
+// be slow on some GPUs. However, it uses more instructions in total.
 vec3 spot_integral2(vec3 sample_value, vec3 w_rcp, float x, float x0, float x1, float y) {
     vec3 edge0 = clamp(w_rcp * (x - x0), -1.0, 1.0);
     vec3 edge1 = clamp(w_rcp * (x - x1), -1.0, 1.0);
     vec3 y_ = clamp(abs(y) * w_rcp, 0.0, 1.0);
     return sample_value * w_rcp * ((y_ * y_) * (2.0 * y_ - 3.0) + 1.0) *
-        (((edge0 * edge0) * (mix(vec3(-0.5), vec3(0.5), greaterThan(edge0, vec3(0.0))) * (edge0 * edge0) - edge0) + edge0) -
-            ((edge1 * edge1) * (mix(vec3(-0.5), vec3(0.5), greaterThan(edge1, vec3(0.0))) * (edge1 * edge1) - edge1) + edge1));
+        (((edge0 * edge0) * (fast_sign(edge0) * (edge0 * edge0) - edge0) + edge0) -
+            ((edge1 * edge1) * (fast_sign(edge1) * (edge1 * edge1) - edge1) + edge1));
+}
+
+vec3 scanlines(lines_t lines, float u) {
+    vec3 value = vec3(0.0);
+    // TODO check bounds
+    float start_x = params.SourceSize.z * (floor(u * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
+    float stop_x = params.SourceSize.z * (floor(u * params.SourceSize.x + (params.MaxSpotSize / delta)) + 1.0);
+    float x = u * params.SourceSize.x * delta;
+    for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
+        vec3 upper_sample = textureLod(Linearized, vec2(sample_x, lines.upper_sample_y), 0.0).rgb;
+        vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, lines.upper_sample_y), 0.0).rgb;
+        vec3 lower_sample = textureLod(Linearized, vec2(sample_x, lines.lower_sample_y), 0.0).rgb;
+        vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lines.lower_sample_y), 0.0).rgb;
+        float x0 = delta * (params.SourceSize.x * sample_x - 0.5);
+        float x1 = x0 + delta;
+        value += spot_integral(upper_sample, upper_width_rcp, x, x0, x1, lines.upper_distance_y);
+        value += spot_integral(lower_sample, lower_width_rcp, x, x0, x1, lines.lower_distance_y);
+    }
+    // We pulled these common factors out of the integral. Multiply them now.
+    return params.MaxSpotSize / (2 * PI) * value; // For spot 1
+    // return params.MaxSpotSize * value; // For spot 2
 }
 
 void main() {
-    // Sample locations in Source texel space: [0, SourceSize.y), snapped to the
-    // middle of a texel.
-    float upper_sample_y, lower_sample_y;
-    // Distance units are *scanlines heights*.
-    float upper_distance_y, lower_distance_y;
-
-    // Check if we should be interlacing. If we are, grab two closest even or
-    // odd lines. If we aren't, just grab the two closest lines.
-    if (params.SourceSize.y > 300.0 && params.OddFieldFirst != 2.0) { // Interlacing
-        if ((params.FrameCount + (params.OddFieldFirst == 1.0 ? 1u : 0u)) % 2u == 0u) {
-            upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y + 0.25) * 2.0 - 0.5;
-        } else {
-            upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y - 0.25) * 2.0 + 0.5;
-        }
-        lower_sample_y = upper_sample_y - 2.0;
-        // TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
-        upper_distance_y = 0.5 * (upper_sample_y - vTexCoord.y * params.SourceSize.y);
-        lower_distance_y = upper_distance_y - 1.0;
-    } else { // No interlacing
-        upper_sample_y = round(vTexCoord.y * params.SourceSize.y) + 0.5;
-        lower_sample_y = upper_sample_y - 1.0;
-        upper_distance_y = upper_sample_y - vTexCoord.y * params.SourceSize.y;
-        lower_distance_y = upper_distance_y - 1.0;
-    }
-
-    // Transform *_sample_y into [0,1] coordinate space. We need them for the
-    // texture sampling below.
-    upper_sample_y *= params.SourceSize.w;
-    lower_sample_y *= params.SourceSize.w;
-
     vec3 value = vec3(0.0);
-    // TODO check bounds
-    float start_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
-    float stop_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta)) + 1.0);
-    float x = vTexCoord.x * params.SourceSize.x * delta;
-    for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
-        vec3 upper_sample = textureLod(Linearized, vec2(sample_x, upper_sample_y), 0.0).rgb;
-        vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, upper_sample_y), 0.0).rgb;
-        vec3 lower_sample = textureLod(Linearized, vec2(sample_x, lower_sample_y), 0.0).rgb;
-        vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lower_sample_y), 0.0).rgb;
-        float x0 = delta * (params.SourceSize.x * sample_x - 0.5);
-        float x1 = x0 + delta;
-        value += spot_integral2(upper_sample, upper_width_rcp, x, x0, x1, upper_distance_y);
-        value += spot_integral2(lower_sample, lower_width_rcp, x, x0, x1, lower_distance_y);
+    if (params.OddFieldFirst == 3.0 && params.SourceSize.y < 350) {
+        // VGA line doubling
+        lines_t lines = get_doubled_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
+    } else if (params.OddFieldFirst == 4.0 || params.OddFieldFirst == 3.0 || params.SourceSize.y <= 300.0) {
+        // no interlacing
+        lines_t lines = get_closest_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
+    } else if (params.OddFieldFirst == 2.0) {
+        // weave
+        // Simulate even and odd fields, then average them together
+        lines_t lines_even = get_even_lines(vTexCoord.y, params.SourceSize);
+        lines_t lines_odd = get_odd_lines(vTexCoord.y, params.SourceSize);
+        value = 0.5 * (scanlines(lines_even, vTexCoord.x) + scanlines(lines_odd, vTexCoord.x));
+    } else if ((params.FrameCount + (params.OddFieldFirst == 1.0 ? 1u : 0u)) % 2u == 0u) {
+        // bob (odd phase)
+        lines_t lines = get_odd_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
+    } else {
+        // bob (even phase)
+        lines_t lines = get_even_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
     }
-    // We pulled these common factors out of the integral. Multiply them now.
-    // value = params.MaxSpotSize / (2 * PI) * value;
-    value *= params.MaxSpotSize;
 
     if (params.MaskType == 1.0) {
         vec4 mask = subpixel_aperture_grille(viewportCoord, params.OutputSize, params.SubpixelPattern, params.SubpixelMaskPattern);

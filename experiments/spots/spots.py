@@ -27,6 +27,7 @@ def gauss_spot(x, y):
     #return 1 / (np.sqrt(2 * np.pi) * c) * np.exp(-x**2 / (2 * c**2)) * np.exp(-y**2 / (2 * c**2))
     return np.exp(-x**2 / (2 * c**2)) * np.exp(-y**2 / (2 * c**2))
 
+
 def vcubic_hgauss_spot(x, y):
     c = 1 / (2 * np.sqrt(2 * np.log(2)))
     y = np.clip(np.abs(y), 0.0, 1.0)

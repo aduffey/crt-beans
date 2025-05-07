@@ -9,6 +9,7 @@ layout(push_constant) uniform Push {
     float GlowSigma;
 } params;
 
+// #pragma format R8G8B8A8_SRGB
 #pragma format R16G16B16A16_SFLOAT
 
 #include "parameters_common.inc.slang"

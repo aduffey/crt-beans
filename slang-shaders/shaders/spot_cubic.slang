@@ -24,6 +24,7 @@ layout(push_constant) uniform Push {
 #include "parameters_common.inc.slang"
 #include "parameters_sampled.inc.slang"
 #include "mask.inc.slang"
+#include "line_handling.inc.slang"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -67,51 +68,69 @@ vec3 spot(vec3 sample_value, vec3 width_rcp, float distance_x, float distance_y)
     return sample_value * width_rcp * width_rcp * ((x * x) * (2.0 * x - 3.0) + 1.0) * ((y * y) * (2.0 * y - 3.0) + 1.0);
 }
 
-void main() {
-    // Sample locations in Source texel space: [0, SourceSize.y), snapped to the
-    // middle of a texel.
-    float upper_sample_y, lower_sample_y;
-    // Distance units are *scanlines heights*.
-    float upper_distance_y, lower_distance_y;
-
-    // Check if we should be interlacing. If we are, grab two closest even or
-    // odd lines. If we aren't, just grab the two closest lines.
-    if (params.SourceSize.y > 300.0) { // Interlacing
-        if ((params.FrameCount + (params.OddFieldFirst > 0.5 ? 1u : 0u)) % 2u == 0u) {
-            upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y + 0.25) * 2.0 - 0.5;
-        } else {
-            upper_sample_y = ceil(0.5 * vTexCoord.y * params.SourceSize.y - 0.25) * 2.0 + 0.5;
-        }
-        lower_sample_y = upper_sample_y - 2.0;
-        // TODO 0.5 doesn't quite work with an odd number of lines. Does that ever happen?
-        upper_distance_y = 0.5 * (upper_sample_y - vTexCoord.y * params.SourceSize.y);
-        lower_distance_y = upper_distance_y - 1.0;
-    } else { // No interlacing
-        upper_sample_y = round(vTexCoord.y * params.SourceSize.y) + 0.5;
-        lower_sample_y = upper_sample_y - 1.0;
-        upper_distance_y = upper_sample_y - vTexCoord.y * params.SourceSize.y;
-        lower_distance_y = upper_distance_y - 1.0;
-    }
-
-    // Transform *_sample_y into [0,1] coordinate space. We need them for the
-    // texture sampling below.
-    upper_sample_y *= params.SourceSize.w;
-    lower_sample_y *= params.SourceSize.w;
-
+vec3 scanlines(lines_t lines, float u) {
     vec3 value = vec3(0.0);
-    float start_x = params.SourceSize.z * (round(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
-    float stop_x = params.SourceSize.z * round(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta));
-    float distance_x = delta * params.SourceSize.x * (start_x - vTexCoord.x);
+    float start_x = params.SourceSize.z * (round(u * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
+    float stop_x = params.SourceSize.z * round(u * params.SourceSize.x + (params.MaxSpotSize / delta));
+    float distance_x = delta * params.SourceSize.x * (start_x - u);
     for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
-        vec3 upper_sample = textureLod(Filtered, vec2(sample_x, upper_sample_y), 0.0).rgb;
-        vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, upper_sample_y), 0.0).rgb;
-        vec3 lower_sample = textureLod(Filtered, vec2(sample_x, lower_sample_y), 0.0).rgb;
-        vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lower_sample_y), 0.0).rgb;
-        value += spot(upper_sample, upper_width_rcp, distance_x, upper_distance_y);
-        value += spot(lower_sample, lower_width_rcp, distance_x, lower_distance_y);
+        vec3 upper_sample = textureLod(Filtered, vec2(sample_x, lines.upper_sample_y), 0.0).rgb;
+        vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, lines.upper_sample_y), 0.0).rgb;
+        vec3 lower_sample = textureLod(Filtered, vec2(sample_x, lines.lower_sample_y), 0.0).rgb;
+        vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lines.lower_sample_y), 0.0).rgb;
+        value += spot(upper_sample, upper_width_rcp, distance_x, lines.upper_distance_y);
+        value += spot(lower_sample, lower_width_rcp, distance_x, lines.lower_distance_y);
         distance_x += delta;
     }
-    value = delta * params.MaxSpotSize * value;
+    return delta * params.MaxSpotSize * value;
+}
+
+vec3 scanlines4(lines_t lines1, lines_t lines2, float u) {
+    vec3 value1 = vec3(0.0);
+    vec3 value2 = vec3(0.0);
+    float start_x = params.SourceSize.z * (round(u * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
+    float stop_x = params.SourceSize.z * round(u * params.SourceSize.x + (params.MaxSpotSize / delta));
+    float distance_x = delta * params.SourceSize.x * (start_x - u);
+    for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
+        vec3 upper_sample = textureLod(Filtered, vec2(sample_x, lines1.upper_sample_y), 0.0).rgb;
+        vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, lines1.upper_sample_y), 0.0).rgb;
+        vec3 lower_sample = textureLod(Filtered, vec2(sample_x, lines1.lower_sample_y), 0.0).rgb;
+        vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lines1.lower_sample_y), 0.0).rgb;
+        value1 += spot(upper_sample, upper_width_rcp, distance_x, lines1.upper_distance_y);
+        value1 += spot(lower_sample, lower_width_rcp, distance_x, lines1.lower_distance_y);
+        upper_sample = textureLod(Filtered, vec2(sample_x, lines2.upper_sample_y), 0.0).rgb;
+        upper_width_rcp = textureLod(Source, vec2(sample_x, lines2.upper_sample_y), 0.0).rgb;
+        lower_sample = textureLod(Filtered, vec2(sample_x, lines2.lower_sample_y), 0.0).rgb;
+        lower_width_rcp = textureLod(Source, vec2(sample_x, lines2.lower_sample_y), 0.0).rgb;
+        value2 += spot(upper_sample, upper_width_rcp, distance_x, lines2.upper_distance_y);
+        value2 += spot(lower_sample, lower_width_rcp, distance_x, lines2.lower_distance_y);
+        distance_x += delta;
+    }
+    return delta * params.MaxSpotSize * (value1 + value2) / 2.0;
+}
+
+void main() {
+    vec3 value = vec3(0.0);
+    if (params.SourceSize.y <= 300.0) {
+        // no interlacing
+        lines_t lines = get_closest_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
+    } else if (params.OddFieldFirst == 2.0) {
+        // weave
+        // Simulate even and odd fields, then average them together
+        lines_t lines_even = get_even_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines_even, vTexCoord.x);
+        lines_t lines_odd = get_odd_lines(vTexCoord.y, params.SourceSize);
+        value = 0.5 * (value + scanlines(lines_odd, vTexCoord.x));
+    } else if ((params.FrameCount + (params.OddFieldFirst == 1.0 ? 1u : 0u)) % 2u == 0u) {
+        // bob (odd phase)
+        lines_t lines = get_odd_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
+    } else {
+        // bob (even phase)
+        lines_t lines = get_even_lines(vTexCoord.y, params.SourceSize);
+        value = scanlines(lines, vTexCoord.x);
+    }
 
     if (params.MaskType == 1.0) {
         vec4 mask = subpixel_aperture_grille(viewportCoord, params.OutputSize, params.SubpixelPattern, params.SubpixelMaskPattern);

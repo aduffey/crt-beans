@@ -355,29 +355,29 @@ def spot_gauss(sample, distance_x, distance_y):
     return sample / (2 * sigma * sigma) * tm.exp(-(x * x + y * y) / (2 * sigma * sigma))
 
 
-def spot_fast_fragment(image_in, output_dim):
+def spot_analytical_fragment(image_in, output_dim):
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
     field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
     field_in.from_numpy(image_in)
     field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
-    output_field = taichi_spot_fast_fragment(field_in, field_out)
+    output_field = taichi_spot_analytical_fragment(field_in, field_out)
     return field_out.to_numpy()
 
 
 @ti.kernel
-def taichi_spot_fast_fragment(field_in: ti.template(), field_out: ti.template()):
+def taichi_spot_analytical_fragment(field_in: ti.template(), field_out: ti.template()):
     (in_height, in_width) = field_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
         vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
-        field_out[y, x] = spot_sim_fast(vTexCoord, field_in, SourceSize, OutputSize)
+        field_out[y, x] = spot_sim_analytical(vTexCoord, field_in, SourceSize, OutputSize)
     return
 
 @ti.func
-def spot_sim_fast(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
+def spot_sim_analytical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
     # Overscan
     vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
 
@@ -398,13 +398,13 @@ def spot_sim_fast(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.v
         lower_sample = texelFetch(img, tm.ivec2(sample_x, lower_sample_y))
         x0 = delta * sample_x
         x1 = x0 + delta
-        output += spot_fast2(upper_sample, x, x0, x1, upper_distance_y)
-        output += spot_fast2(lower_sample, x, x0, x1, lower_distance_y)
+        output += spot_analytical(upper_sample, x, x0, x1, upper_distance_y)
+        output += spot_analytical(lower_sample, x, x0, x1, lower_distance_y)
     return output
 
 
 @ti.func
-def spot_fast(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
+def spot_analytical(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
     w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x0 = tm.clamp((x - x0_) / w, -1.0, 1.0)
     x1 = tm.clamp((x - x1_) / w, -1.0, 1.0)
@@ -414,7 +414,7 @@ def spot_fast(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
 
 
 @ti.func
-def spot_fast2(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
+def spot_analytical2(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
     w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
     x0 = tm.clamp((x - x0_) / w, -1.0, 1.0)
     x1 = tm.clamp((x - x1_) / w, -1.0, 1.0)
@@ -423,6 +423,99 @@ def spot_fast2(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: float):
         ((x0 * x0) * (tm.sign(x0) * 0.5 * (x0 * x0) - x0) + x0) -
         ((x1 * x1) * (tm.sign(x1) * 0.5 * (x1 * x1) - x1) + x1)
     )
+
+
+def spot_fast_fragment(image_in, output_dim):
+    (in_height, in_width, in_planes) = image_in.shape
+    (out_height, out_width, out_planes) = output_dim
+    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
+    field_in.from_numpy(image_in)
+    field_intermediate = ti.Vector.field(n=3, dtype=float, shape=(in_height, out_width))
+    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+
+    taichi_spot_fast_horizontal_fragment(field_in, field_intermediate)
+    imwrite("intermediate.png", linear_to_srgb(field_intermediate.to_numpy()))
+    taichi_spot_fast_vertical_fragment(field_intermediate, field_out)
+    return field_out.to_numpy()
+
+
+@ti.kernel
+def taichi_spot_fast_horizontal_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
+    # delta = OutputSize.x * OutputSize.w * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
+    delta = 2880 / 2160 * SourceSize.y * SourceSize.z * (1 - OVERSCAN_VERTICAL) / (1 - OVERSCAN_HORIZONTAL)
+
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = spot_sim_fast_horizontal(vTexCoord, field_in, SourceSize, OutputSize, delta)
+    return
+
+
+@ti.kernel
+def taichi_spot_fast_vertical_fragment(field_in: ti.template(), field_out: ti.template()):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
+
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = spot_sim_fast_vertical(vTexCoord, field_in, SourceSize, OutputSize)
+    return
+
+
+@ti.func
+def spot_sim_fast_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float) -> tm.vec3:
+    sample_y = int(vTexCoord.y * SourceSize.y)
+    output = tm.vec3(0.0)
+    x = vTexCoord.x * SourceSize.x * delta
+    for sample_x in range(int(tm.floor(vTexCoord.x * SourceSize.x - (MAX_SPOT_SIZE / delta))),
+                          int(tm.floor(vTexCoord.x * SourceSize.x + (MAX_SPOT_SIZE / delta))) + 1):
+        sample = texelFetch(img, tm.ivec2(sample_x, sample_y))
+        x0 = delta * sample_x
+        x1 = x0 + delta
+        output += spot_fast_horizontal(sample, x, x0, x1)
+    return output
+
+
+@ti.func
+def spot_sim_fast_vertical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4) -> tm.vec3:
+    # Overscan
+    vTexCoord = (1.0 - tm.vec2(OVERSCAN_HORIZONTAL, OVERSCAN_VERTICAL)) * (vTexCoord - 0.5) + 0.5
+
+    # Distance units (including for delta) are *scanlines heights*. This means
+    # we need to adjust x distances by the aspect ratio. Overscan needs to be
+    # taken into account because it can change the aspect ratio.
+    upper_sample_y = int(tm.round(vTexCoord.y * SourceSize.y))
+    lower_sample_y = upper_sample_y - 1
+    upper_distance_y = (upper_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+    lower_distance_y = (lower_sample_y + 0.5) - vTexCoord.y * SourceSize.y
+
+    upper_sample = texelFetch(img, tm.ivec2(int(vTexCoord.x * SourceSize.x), upper_sample_y))
+    lower_sample = texelFetch(img, tm.ivec2(int(vTexCoord.x * SourceSize.x), lower_sample_y))
+    return spot_fast_vertical(upper_sample, upper_distance_y) + spot_fast_vertical(lower_sample, lower_distance_y)
+
+
+@ti.func
+def spot_fast_horizontal(sample: tm.vec3, x: float, x0_: float, x1_: float):
+    w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    x0 = tm.clamp((x - x0_) / w, -1.0, 1.0)
+    x1 = tm.clamp((x - x1_) / w, -1.0, 1.0)
+    return 1 / (2.0 * np.pi) * sample * (np.pi * x0 + tm.sin(np.pi * x0) - np.pi * x1 - tm.sin(np.pi * x1))
+
+
+@ti.func
+def spot_fast_vertical(sample: tm.vec3, y_: float):
+    w = tm.mix(MAX_SPOT_SIZE * MIN_SPOT_SIZE, MAX_SPOT_SIZE, tm.sqrt(sample))
+    y = tm.clamp(abs(y_) / w, 0.0, 1.0)
+    return sample * MAX_SPOT_SIZE / w * (0.5 * tm.cos(np.pi * y) + 0.5)
 
 
 f16vec3 = ti.types.vector(3, ti.f16)
@@ -941,7 +1034,7 @@ Lnp = 1 / (CUTOFF * 53.33e-6 * 2)
 L = tm.vec3(Lnp[0], Lnp[1], Lnp[2])
 
 # For scanlines, interlacing, and overscan
-OUTPUT_RESOLUTION = (2160, 2864)  #(8640, 11520) (2160, 2880) (1440, 1920) (1080, 1440) (800, 1067) (720, 960)
+OUTPUT_RESOLUTION = (2160, 2880)  #(8640, 11520) (2160, 2880) (1440, 1920) (1080, 1440) (800, 1067) (720, 960)
 MAX_SPOT_SIZE = 0.9
 MIN_SPOT_SIZE = 0.4
 OVERSCAN_HORIZONTAL = 0.0
@@ -957,7 +1050,7 @@ MASK_AMOUNT = 1.0
 
 # Diffusion
 BLUR_SIGMA = 0.05
-BLUR_AMOUNT = 0.05  #0.15  #0.13
+BLUR_AMOUNT = 0.04  #0.15  #0.13
 
 
 # TODO Clean this up. Parameterize options.
@@ -965,17 +1058,12 @@ def simulate(img):
     # Read image
     image_height, image_width, planes = img.shape
 
-    # To CRT gamma
-    #img_crt_gamma = srgb_to_gamma(img, GAMMA)
-    #img_crt_gamma = gamma_to_gamma(img.astype(np.float32) / 255, 2.2, GAMMA)
-    img_crt_gamma = img.astype(np.float32) / 255
-
     if USE_YIQ:
-        img_crt_gamma = gamma_to_yiq(img_crt_gamma)
+        img = gamma_to_yiq(img)
 
     # Horizontal low pass filter
     print('Low pass filtering...')
-    img_filtered = filter_fragment(img_crt_gamma, (image_height, SAMPLES, 3))
+    img_filtered = filter_fragment(img, (image_height, SAMPLES, 3))
     # imwrite('filtered.png', linear_to_srgb(img_filtered))  # DEBUG
 
     # DEBUG -- Write Y, I, and Q planes to separate images
@@ -1010,8 +1098,8 @@ def simulate(img):
     # img_masked = tiled_mask(img_spot)
     # img_masked = subpixel_mask(img_spot)
     # img_masked = coverage_mask(img_spot)
-    # img_masked = bandlimit_mask(img_spot)
-    img_masked = additive_mask(img_spot)
+    img_masked = bandlimit_mask(img_spot)
+    # img_masked = additive_mask(img_spot)
     # img_masked = img_spot
 
     # Diffusion
@@ -1019,13 +1107,28 @@ def simulate(img):
     sigma = BLUR_SIGMA * OUTPUT_RESOLUTION[0]
     # box_radius = int(np.round((np.sqrt(3 * sigma * sigma + 1) - 1) / 2))
     # blurred = box_blur(img_masked, box_radius)
-    blurred = gaussian_blur(img_masked, sigma=sigma)
+    # blurred = gaussian_blur(img_masked, sigma=sigma)
     #imwrite('blurred.png', linear_to_srgb(blurred))  # DEBUG
-    img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
-    # img_diffused = img_masked
+    # img_diffused = img_masked + (blurred - img_masked) * BLUR_AMOUNT
+    img_diffused = img_masked
 
     # return tone_map(4*img_diffused)
     return img_diffused
+
+
+# TODO Clean this up. Parameterize options.
+def simulate_analytical(img):
+    # Read image
+    image_height, image_width, planes = img.shape
+
+    # To linear RGB
+    img_linear = gamma_to_linear(img, GAMMA)
+
+    # Mimic CRT spot
+    print('Simulating CRT spot...')
+    img_spot = spot_analytical_fragment(img_linear, (OUTPUT_RESOLUTION[0], OUTPUT_RESOLUTION[1], 3))
+
+    return img_spot
 
 
 # TODO Clean this up. Parameterize options.
@@ -1033,13 +1136,8 @@ def simulate_fast(img):
     # Read image
     image_height, image_width, planes = img.shape
 
-    # To CRT gamma
-    #img_crt_gamma = srgb_to_gamma(img, GAMMA)
-    #img_crt_gamma = gamma_to_gamma(img.astype(np.float32) / 255, 2.2, GAMMA)
-    img_crt_gamma = img.astype(np.float32) / 255
-
     # To linear RGB
-    img_linear = gamma_to_linear(img_crt_gamma, GAMMA)
+    img_linear = gamma_to_linear(img, GAMMA)
 
     # Mimic CRT spot
     print('Simulating CRT spot...')
@@ -1058,9 +1156,10 @@ def main():
 
     # Read image
     img_original = imread(args.input)
+    img_float = img_original.astype(np.float32) / 255
 
     # Simulate
-    img_crt = simulate(img_original)
+    img_crt = simulate_fast(img_float)
 
     # To sRGB
     print('Color transform and save...')

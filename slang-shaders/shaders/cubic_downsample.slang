@@ -8,6 +8,7 @@ layout(push_constant) uniform Push {
     vec4 SourceSize;
 } params;
 
+// #pragma format R8G8B8A8_SRGB
 #pragma format R16G16B16A16_SFLOAT
 
 #pragma stage vertex
