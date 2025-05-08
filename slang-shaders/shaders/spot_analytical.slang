@@ -47,7 +47,13 @@ void main() {
             (1 - params.OverscanVertical) / (1 - params.OverscanHorizontal);
 
     // Adjust delta if we're interlacing.
-    delta = params.SourceSize.y > 300.0 && params.OddFieldFirst != 2.0 ? 0.5 * delta : delta;
+    if (params.OddFieldFirst <= 2.0 && params.SourceSize.y > 300.0) {
+        // bob or weave
+        delta = 0.5 * delta;
+    } else if (params.OddFieldFirst == 3.0 && params.SourceSize.y < 350) {
+        // VGA line doubling
+        delta = 2.0 * delta;
+    }
 
     // The viewport coordinates (*not* processed for overscan).
     // We need this for the mask.

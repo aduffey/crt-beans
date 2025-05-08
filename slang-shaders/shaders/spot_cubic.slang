@@ -85,30 +85,6 @@ vec3 scanlines(lines_t lines, float u) {
     return delta * params.MaxSpotSize * value;
 }
 
-vec3 scanlines4(lines_t lines1, lines_t lines2, float u) {
-    vec3 value1 = vec3(0.0);
-    vec3 value2 = vec3(0.0);
-    float start_x = params.SourceSize.z * (round(u * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
-    float stop_x = params.SourceSize.z * round(u * params.SourceSize.x + (params.MaxSpotSize / delta));
-    float distance_x = delta * params.SourceSize.x * (start_x - u);
-    for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
-        vec3 upper_sample = textureLod(Filtered, vec2(sample_x, lines1.upper_sample_y), 0.0).rgb;
-        vec3 upper_width_rcp = textureLod(Source, vec2(sample_x, lines1.upper_sample_y), 0.0).rgb;
-        vec3 lower_sample = textureLod(Filtered, vec2(sample_x, lines1.lower_sample_y), 0.0).rgb;
-        vec3 lower_width_rcp = textureLod(Source, vec2(sample_x, lines1.lower_sample_y), 0.0).rgb;
-        value1 += spot(upper_sample, upper_width_rcp, distance_x, lines1.upper_distance_y);
-        value1 += spot(lower_sample, lower_width_rcp, distance_x, lines1.lower_distance_y);
-        upper_sample = textureLod(Filtered, vec2(sample_x, lines2.upper_sample_y), 0.0).rgb;
-        upper_width_rcp = textureLod(Source, vec2(sample_x, lines2.upper_sample_y), 0.0).rgb;
-        lower_sample = textureLod(Filtered, vec2(sample_x, lines2.lower_sample_y), 0.0).rgb;
-        lower_width_rcp = textureLod(Source, vec2(sample_x, lines2.lower_sample_y), 0.0).rgb;
-        value2 += spot(upper_sample, upper_width_rcp, distance_x, lines2.upper_distance_y);
-        value2 += spot(lower_sample, lower_width_rcp, distance_x, lines2.lower_distance_y);
-        distance_x += delta;
-    }
-    return delta * params.MaxSpotSize * (value1 + value2) / 2.0;
-}
-
 void main() {
     vec3 value = vec3(0.0);
     if (params.SourceSize.y <= 300.0) {
