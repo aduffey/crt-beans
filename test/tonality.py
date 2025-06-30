@@ -15,7 +15,7 @@ values = list(reversed([1.0 / (2**x) for x in range(10)]))
 simulated_means = []
 for val in values:
     img = np.full((240, 256, 3), val**(1/2.4)).astype(np.float32)
-    out = sim_taichi.simulate_fast(img)
+    out = sim_taichi.simulate_analytical(img)
     # out = np.clip(out, 0.0, 1.0)
     # print(val**(1/2.4))  # DEBUG
     # imwrite(f'debug-in-{val}.png', linear_to_srgb(img))  # DEBUG

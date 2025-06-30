@@ -108,7 +108,7 @@ vec3 fast_sign(vec3 val) {
     return vec3(val.r < 0.0 ? -0.5 : 0.5, val.g < 0.0 ? -0.5 : 0.5, val.b < 0.0 ? -0.5 : 0.5);
 }
 
-// This is basically the same as the above function, but with using the cubic
+// This is basically the same as the above function, but using the cubic
 // function as the horizontal component. This avoids the sin() calls, which may
 // be slow on some GPUs. However, it uses more instructions in total.
 vec3 spot_integral2(vec3 sample_value, vec3 w_rcp, float x, float x0, float x1, float y) {
@@ -137,8 +137,8 @@ vec3 scanlines(lines_t lines, float u) {
         value += spot_integral(lower_sample, lower_width_rcp, x, x0, x1, lines.lower_distance_y);
     }
     // We pulled these common factors out of the integral. Multiply them now.
-    return params.MaxSpotSize / (2 * PI) * value; // For spot 1
-    // return params.MaxSpotSize * value; // For spot 2
+    return params.MaxSpotSize / (2 * PI) * value; // For spot_integral
+    // return params.MaxSpotSize * value; // For spot_integral2
 }
 
 void main() {

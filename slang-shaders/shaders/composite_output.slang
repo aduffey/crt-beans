@@ -69,19 +69,6 @@ vec3 gamma_to_linear(vec3 rgb) {
 }
 
 // Apply a simple 8-bit dither to minimize banding in the glow.
-vec3 dither(vec3 rgb, ivec2 icoords) {
-    // First get the noise value, with some random-looking offset each frame.
-    // We know the texture is 64x64, so we can modulo with bit arithmetic.
-    // Actual integer modulo is *very* slow on some GPUs.
-    ivec2 offset = ivec2(params.FrameCount & 0x3f) * ivec2(17u, 13u);
-    vec3 noise = texelFetch(BlueNoiseTex, (icoords + offset) & 0x3f, 0).rgb;
-    // Convert to a triangular distribution
-    noise = 2.0 * noise - 1.0;
-    noise = sign(noise) * (1.0 - sqrt(clamp(1.0 - abs(noise), 0.0, 1.0)));
-    return rgb + noise / 255.0;
-}
-
-// Apply a simple 8-bit dither to minimize banding in the glow.
 vec3 dither_srgb(vec3 rgb, ivec2 icoords) {
     // First get the noise value, with some random-looking offset each frame.
     // We know the texture is 64x64, so we can modulo with bit arithmetic.
