@@ -8,7 +8,7 @@ scale_type0 = source
 scale0 = 1.0
 
 //======== Draw the scanlines, handling interlacing and overscan.
-shader1 = shaders/spot_fast_horizontal.slang
+shader1 = shaders/scanlines_fast_horizontal.slang
 filter_linear1 = false
 wrap_mode1 = clamp_to_border
 mipmap_input1 = false
@@ -17,7 +17,7 @@ scale_x1 = 1.0
 scale_type_y1 = source
 scale_y1 = 1.0
 
-shader2 = shaders/spot_fast_vertical.slang
+shader2 = shaders/scanlines_fast_vertical.slang
 filter_linear2 = false
 wrap_mode2 = clamp_to_border
 mipmap_input2 = false

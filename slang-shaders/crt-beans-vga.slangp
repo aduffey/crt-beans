@@ -1,5 +1,14 @@
 shaders = 11
 
+// VGA line handling (line doubling below 350 lines)
+OddFieldFirst = 3.0
+// Monitor-like spot size (less variation than TVs)
+MaxSpotSize = 0.95
+MinSpotSize = 0.7
+// No mask (fine dot masks are too difficult to simulate and generally
+// not visible)
+MaskType = 0.0
+
 textures = BlueNoiseTex
 
 // Blue noise texture from https://github.com/Calinou/free-blue-noise-textures
@@ -28,7 +37,7 @@ mipmap_input1 = false
 scale_type1 = source
 scale1 = 1.0
 
-shader2 = shaders/spot_analytical.slang
+shader2 = shaders/scanlines_analytical.slang
 alias2 = Scanlines
 filter_linear2 = false
 wrap_mode2 = clamp_to_edge
