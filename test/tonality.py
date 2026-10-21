@@ -1,4 +1,5 @@
 import numpy as np
+from config import SimulationConfig
 import sim_taichi
 from imageio.v3 import imwrite, imread
 import matplotlib.pyplot as plt
@@ -13,9 +14,11 @@ def linear_to_srgb(img):
 
 values = list(reversed([1.0 / (2**x) for x in range(10)]))
 simulated_means = []
+config = SimulationConfig(scanline_method='analytical', enable_analog=False, enable_masking=False, enable_diffusion=False)
+
 for val in values:
     img = np.full((240, 256, 3), val**(1/2.4)).astype(np.float32)
-    out = sim_taichi.simulate_analytical(img)
+    out = sim_taichi.simulate(img, config=config)
     # out = np.clip(out, 0.0, 1.0)
     # print(val**(1/2.4))  # DEBUG
     # imwrite(f'debug-in-{val}.png', linear_to_srgb(img))  # DEBUG

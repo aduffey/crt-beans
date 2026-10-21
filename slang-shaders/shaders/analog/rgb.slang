@@ -30,19 +30,11 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
+#include "../colorspace/conversions.inc"
 #include "filter.inc"
-
-#define CRT_GAMMA 2.4
-
-vec3 gamma_to_linear(vec3 rgb) {
-    // Floating point inaccuracies or out-of-gamut colors from the YIQ
-    // to RGB transform could result in negative values, so we'll clamp
-    // here to avoid NaNs.
-    return pow(clamp(rgb, 0.0, 1.0), vec3(CRT_GAMMA));
-}
 
 void main() {
     vec3 L = 1.0 / (vec3(params.Bandwidth) * 52.5 * 2.0);
     vec3 filtered = low_pass(L, vTexCoord, params.SourceSize, Source);
-    FragColor.rgb = gamma_to_linear(filtered);
+    FragColor.rgb = gamma_to_linear(filtered, CRT_GAMMA);
 }

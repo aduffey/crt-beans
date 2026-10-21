@@ -16,6 +16,7 @@ layout(push_constant) uniform Push {
 } params;
 
 #include "parameters_common.inc"
+#include "colorspace/conversions.inc"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -34,49 +35,38 @@ layout(binding = 1) uniform sampler2D Source;
 layout(binding = 2) uniform sampler2D Scanlines;
 layout(binding = 3) uniform sampler2D BlueNoiseTex;
 
-vec3 linear_to_srgb(vec3 rgb) {
-    // Floating point inaccuracies could result in negative values, so we'll
-    // clamp here to avoid NaNs.
-    rgb = clamp(rgb, 0.0, 1.0);
-    bvec3 cutoff = lessThan(rgb, vec3(0.0031308));
-    vec3 lower = rgb * vec3(12.92);
-    vec3 higher = vec3(1.055) * pow(rgb, vec3(1.0 / 2.4)) - vec3(0.055);
+// Plastic constant R2 sequence for 2D toroidal spatial jump
+const uvec2 R2 = uvec2(3242171952u, 2447432860u);
 
-    return mix(higher, lower, cutoff);
-}
+// Golden ratio R1 sequence for value-domain Cranley-Patterson rotation
+const uint GOLDEN_RATIO_CONJ = 2654435769u;
 
-vec3 srgb_to_linear(vec3 rgb) {
-    // Floating point inaccuracies could result in negative values, so we'll
-    // clamp here to avoid NaNs.
-    rgb = clamp(rgb, 0.0, 1.0);
-    bvec3 cutoff = lessThan(rgb, vec3(0.04045));
-    vec3 lower = rgb / 12.92;
-    vec3 higher = pow((rgb + 0.055) / 1.055, vec3(2.4));
+vec3 noise(ivec2 screen_coord) {
+    // We don't want to only offset the noise each frame or the eye can track
+    // its movement. We will offset and TODO
+    //
+    // We will use unsigned integer math to avoid a loss of precision as the
+    // FrameCount grows.
+    //
+    // 1. Calculate integer toroidal pixel offset
+    // uvec is 32 bits and our texture is 2^6x2^6, so we shift by 32 - 6.
+    ivec2 spatial_offset = ivec2((uvec2(params.FrameCount) * R2) >> uvec2(26u));
 
-    return mix(higher, lower, cutoff);
-}
+    // 2. Fetch spatially shifted blue noise (toroidal wrap via bitwise AND)
+    // NOTE: We are assuming the blue noise texture size is 64x64.
+    ivec2 texel_coord = (screen_coord + spatial_offset) & ivec2(63);
+    vec3 raw_noise = texelFetch(BlueNoiseTex, texel_coord, 0).rgb;
 
-vec3 linear_to_gamma(vec3 rgb) {
-    // Floating point inaccuracies could result in negative values, so we'll
-    // clamp here to avoid NaNs.
-    rgb = clamp(rgb, 0.0, 1.0);
-    return pow(rgb, vec3(1.0 / 2.2));
-}
+    // 3. Apply Cranley-Patterson rotation
+    uint temporal_fixed = (params.FrameCount * GOLDEN_RATIO_CONJ) >> 8u;
+    float temporal_offset = float(temporal_fixed) * (1.0 / 16777216.0); // Exact divide by 2^24
 
-vec3 gamma_to_linear(vec3 rgb) {
-    // Floating point inaccuracies could result in negative values, so we'll
-    // clamp here to avoid NaNs.
-    rgb = clamp(rgb, 0.0, 1.0);
-    return pow(rgb, vec3(2.2));
+    return fract(raw_noise + temporal_offset);
 }
 
 // Apply a simple 8-bit dither to minimize banding in the glow.
 vec3 dither_srgb(vec3 rgb, ivec2 icoords) {
-    // First get the noise value, with some random-looking offset each frame.
-    // We know the texture is 64x64, so we can modulo with bit arithmetic.
-    // Actual integer modulo is *very* slow on some GPUs.
-    ivec2 offset = ivec2(params.FrameCount & 0x3f) * ivec2(17u, 13u);
-    vec3 noise = texelFetch(BlueNoiseTex, (icoords + offset) & 0x3f, 0).rgb;
+    vec3 noise = noise(icoords);
 
     const float quantum = 1.0 / 255.0;
     vec3 lower = floor(linear_to_srgb(rgb) / quantum) * quantum;
@@ -87,16 +77,12 @@ vec3 dither_srgb(vec3 rgb, ivec2 icoords) {
 
 // Apply a simple 8-bit dither to minimize banding in the glow.
 vec3 dither_gamma(vec3 rgb, ivec2 icoords) {
-    // First get the noise value, with some random-looking offset each frame.
-    // We know the texture is 64x64, so we can modulo with bit arithmetic.
-    // Actual integer modulo is *very* slow on some GPUs.
-    ivec2 offset = ivec2(params.FrameCount & 0x3f) * ivec2(17u, 13u);
-    vec3 noise = texelFetch(BlueNoiseTex, (icoords + offset) & 0x3f, 0).rgb;
+    vec3 noise = noise(icoords);
 
     const float quantum = 1.0 / 255.0;
-    vec3 lower = floor(linear_to_gamma(rgb) / quantum) * quantum;
+    vec3 lower = floor(linear_to_gamma(rgb, 2.2) / quantum) * quantum;
     vec3 upper = lower + quantum;
-    vec3 threshold = mix(gamma_to_linear(lower), gamma_to_linear(upper), noise);
+    vec3 threshold = mix(gamma_to_linear(lower, 2.2), gamma_to_linear(upper, 2.2), noise);
     return mix(lower, upper, lessThan(threshold, rgb));
 }
 

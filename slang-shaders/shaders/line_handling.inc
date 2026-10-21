@@ -25,8 +25,9 @@ lines_t get_closest_lines(float v, vec4 sourceSize) {
     return lines_t(upper_sample_y, lower_sample_y, upper_distance_y, lower_distance_y);
 }
 
-// Get the two closest lines from the *even* field to the given position.
-lines_t get_even_lines(float v, vec4 sourceSize) {
+// Get the two closest lines from the *odd* field (top field: rows 0, 2, 4..., no
+// half-scanline offset at start) to the given position.
+lines_t get_odd_lines(float v, vec4 sourceSize) {
     float upper_sample_y = ceil(0.5 * v * sourceSize.y - 0.25) * 2.0 + 0.5;
     float lower_sample_y = upper_sample_y - 2.0;
     float upper_distance_y = 0.5 * (upper_sample_y - v * sourceSize.y);
@@ -40,8 +41,9 @@ lines_t get_even_lines(float v, vec4 sourceSize) {
     return lines_t(upper_sample_y, lower_sample_y, upper_distance_y, lower_distance_y);
 }
 
-// Get the two closest lines from the *odd* field to the given position.
-lines_t get_odd_lines(float v, vec4 sourceSize) {
+// Get the two closest lines from the *even* field (bottom field: rows 1, 3, 5...,
+// displaced half a field scanline below the odd field) to the given position.
+lines_t get_even_lines(float v, vec4 sourceSize) {
     float upper_sample_y = ceil(0.5 * v * sourceSize.y + 0.25) * 2.0 - 0.5;
     float lower_sample_y = upper_sample_y - 2.0;
     float upper_distance_y = 0.5 * (upper_sample_y - v * sourceSize.y);

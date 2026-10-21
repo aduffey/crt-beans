@@ -14,13 +14,12 @@ layout(push_constant) uniform Push {
     float MinSpotSize;
     float OverscanHorizontal;
     float OverscanVertical;
-    float OddFieldFirst;
+    float InterlacingType;
 } params;
 
-#pragma format R16G16B16A16_SFLOAT
+#pragma format R32G32B32A32_UINT
 
-#include "parameters_fast.inc"
-#include "parameters_fast.inc"
+#include "parameters_common.inc"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -32,8 +31,6 @@ void main() {
     gl_Position = MVP * Position;
     vTexCoord = TexCoord;
 
-    // TODO Handle horizontal overscan?
-
     // Distance units are *scanlines heights*. delta is the distance between
     // samples on the x-axis, and has to be adjusted by the aspect ratio.
     // Overscan changes the aspect ratio and needs to be taken into account.
@@ -42,10 +39,10 @@ void main() {
             (1 - params.OverscanVertical) / (1 - params.OverscanHorizontal);
 
     // Adjust delta if we're interlacing.
-    if (params.OddFieldFirst <= 2.0 && params.SourceSize.y > 300.0) {
+    if (params.InterlacingType <= 1.0 && params.SourceSize.y > 300.0) {
         // bob or weave
         delta = 0.5 * delta;
-    } else if (params.OddFieldFirst == 3.0 && params.SourceSize.y < 350) {
+    } else if (params.InterlacingType == 2.0 && params.SourceSize.y < 350) {
         // VGA line doubling
         delta = 2.0 * delta;
     }
@@ -54,7 +51,7 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) flat in float delta;
-layout(location = 0) out vec4 FragColor;
+layout(location = 0) out uvec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
 #define PI 3.141592653589793
@@ -84,10 +81,9 @@ layout(binding = 1) uniform sampler2D Source;
 //
 // Note that a common factor of MaxSpotSize / (2 * pi) has been factored out of
 // this function and should be multiplied back in externally.
-vec3 spot_integral(vec3 sample_value, float x, float x0, float x1) {
-    vec3 w_rcp =  1.0 / (params.MinSpotSize * params.MaxSpotSize - sqrt(sample_value) * (params.MinSpotSize * params.MaxSpotSize - params.MaxSpotSize));
-    vec3 u0 = clamp(w_rcp * (x - x0), -1.0, 1.0);
-    vec3 u1 = clamp(w_rcp * (x - x1), -1.0, 1.0);
+vec3 spot_integral(vec3 sample_value, vec3 width, float x, float x0, float x1) {
+    vec3 u0 = clamp((x - x0) / width, -1.0, 1.0);
+    vec3 u1 = clamp((x - x1) / width, -1.0, 1.0);
     return sample_value * (PI * u0 + sin(PI * u0) - PI * u1 - sin(PI * u1));
 }
 
@@ -105,7 +101,8 @@ vec3 spot_integral(vec3 sample_value, float x, float x0, float x1) {
 // }
 
 void main() {
-    vec3 value = vec3(0.0);
+    vec3 energy = vec3(0.0);
+    vec3 moment = vec3(0.0);
     float start_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
     float stop_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta)) + 1.0);
     float x = vTexCoord.x * params.SourceSize.x * delta;
@@ -113,10 +110,28 @@ void main() {
         vec3 sample_value = textureLod(Source, vec2(sample_x, vTexCoord.y), 0.0).rgb;
         float x0 = delta * (params.SourceSize.x * sample_x - 0.5);
         float x1 = x0 + delta;
-        value += spot_integral(sample_value, x, x0, x1);
+        vec3 piece_width = (params.MinSpotSize * params.MaxSpotSize - sqrt(sample_value) * (params.MinSpotSize * params.MaxSpotSize - params.MaxSpotSize));
+        vec3 piece_energy = spot_integral(sample_value, piece_width, x, x0, x1);
+        energy += piece_energy;
+        moment += piece_width * piece_energy;
     }
-    // We pulled these common factors out of the integral. Multiply them now.
-    value = value / (2.0 * PI); // For spot 1 only
 
-    FragColor.rgb = value;
+    vec3 width = min(mix(vec3(params.MinSpotSize * params.MaxSpotSize), moment / energy, notEqual(energy, vec3(0.0))), vec3(params.MaxSpotSize));
+    // We actually only need the reciprocal of the width in the scanline pass.
+    // To avoid calculating it multiple times later on, we'll just do it here.
+    vec3 width_rcp = 1.0 / width;
+
+    // We pulled a common factor of (1.0 / (2.0 * PI)) out of the integral.
+    // We didn't need to multiply it before dividing moment / energy because
+    // it would cancel out. We can do it now for energy.
+    energy = (1.0 / (2.0 * PI)) * energy;
+
+    // Pack both energy and width_rcp into one texture. This avoids an extra
+    // pass (since we don't have multiple render target support) and allows
+    // fewer texture samples in the next pass.
+    FragColor.rgb = uvec3(
+        packHalf2x16(vec2(energy.r, width_rcp.r)),
+        packHalf2x16(vec2(energy.g, width_rcp.g)),
+        packHalf2x16(vec2(energy.b, width_rcp.b))
+    );
 }

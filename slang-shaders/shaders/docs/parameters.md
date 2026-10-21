@@ -10,7 +10,7 @@ Set the overscan (the proportion of the image cropped vertically and horizontall
 
 The units are the total proportion of the image to crop, so a value of 0.06 means that 3% will be cropped on each side. The image will be stretched to fill the screen and match the expected aspect ratio after cropping.
 
-## Maximum and minimum spot size
+## Maximum and minimum scanline size
 
 These parameters control the size of the scanline (the bright part of the line).
 
@@ -46,7 +46,7 @@ The monitor subpixel pattern should be set to match the monitor. If it is not, t
 
 The subpixel mask width controls how many monitor pixels are used for each phosphor triad. For example, a value of 5.0 means that a 4k display would simulate `(2160 * (4/3)) / 5 = 576` phosphor triads across a 4:3 image.
 
-### Mask brightness loss mitigation
+### Mask brightness boost
 
 This parameter controls the amount of mitigation for the brightness loss caused by the mask effect, basically controlling the strength of the mask. A value of 0.0 means that the mask will be full strength and the brightness will be reduced accordingly. Higher values mean that the mask will be at full strength only in the darker areas, while the brighter areas will blend in the underlying scanlines to reduce the brightness loss. At 1.0, any pixels at full brightness will have the mask completely faded out and there will be no brightness loss.
 
@@ -58,36 +58,90 @@ Glow is implemented with an approximation of a gaussian blur mixed into the imag
 
 ## Interlacing
 
-This parameter controls the [interlacing](https://en.wikipedia.org/wiki/Interlaced_video) simulation.
+Interlacing simulation is controlled by two parameters: `InterlacingType` (mode) and `OddFieldFirst` (field phase).
 
-Note that some options are not available in crt-beans-rgb or crt-beans-s-video. These presets are not configured to handle high resolutions above 480i/576i (other than through using "weave" on 480p/576p content).
+When the vertical input resolution is less than or equal to 300, no interlacing effect is applied (unless VGA mode is used on low-resolution content).
 
-### Bob (0.0, 1.0)
+### Interlacing type
 
-These options display only the even or odd lines of a frame. When the value is 0.0, odd lines will be displayed for even frames and even lines will be displayed for odd frames. When the value is 1.0, even lines will be displayed for even frames and odd lines will be displayed for odd frames. If you are seeing artifacts during interlaced content, try switching this. Unfortunately, there does not seem to be any way of knowing which one is "correct" for a given core.
+#### Bob (0.0)
+
+Displays alternating odd or even fields each frame, simulating a CRT's alternating field raster. When combined with NTSC composite simulation, subcarrier modulation and comb filtering match the active field.
 
 There may be noticeable flickering in this mode. In many cases, flickering was noticeable on the original systems and CRT TVs as well. However, some monitors and TVs can have excessive flickering in this mode, [due to the way they work](https://news.ycombinator.com/item?id=42507741), and the flickering may persist temporarily even after the interlaced content is gone.
 
-When the vertical input resolution is less than or equal to 300, no interlacing effect is applied.
+#### Weave (1.0)
 
-### Weave (2.0)
+Draws both the odd and even fields and blends them together, avoiding the flickering of bob mode. For cores that output 480p, this produces a 480i "look." On true 480i content where the core updates fields alternately in a shared framebuffer, the NTSC simulation maintains per-field subcarrier phase consistency across stale and current fields. Note that there is a performance penalty because twice as many scanlines are evaluated.
 
-This option draws both the odd and even lines and then blends them together, avoiding the flickering and jittering of the bob options. On true interlaced (e.g. 480i) content, this will result in combing artifacts. For cores that output 480p, this will give a 480i "look." Note that there is a significant performance penalty for this option because twice as many scanlines need to be simulated.
+#### VGA (2.0)
 
-When the vertical input resolution is less than or equal to 300, no interlacing effect is applied.
+Enables [VGA line doubling](https://github.com/dosbox-staging/dosbox-staging/issues/2283#issue-1589164907). When the vertical input resolution is below 350, each line is doubled. For example, [DOS mode 13h](https://en.wikipedia.org/wiki/Mode_13h) games have a vertical resolution of 200 and will be drawn with 400 scanlines.
 
-### VGA (3.0) (crt-beans-fast and crt-beans-vga only)
+#### Off (3.0)
 
-This option enables [VGA line doubling](https://github.com/dosbox-staging/dosbox-staging/issues/2283#issue-1589164907). When the vertical input resolution is below 350, each line is doubled. For example, [DOS mode 13h](https://en.wikipedia.org/wiki/Mode_13h) games have a vertical resolution of 200 and will be drawn with 400 scanlines. This was standard behavior for VGA output cards.</dd>
+Turns all interlacing simulation off. The number of scanlines in the output equals the vertical resolution of the input.
 
-### Off (4.0) (crt-beans-fast and crt-beans-vga only)
+### Interlacing phase
 
-Turns all interlacing simulation off. The number of scanlines in the output will be equal to the vertical resolution of the input.
+Controls whether even-numbered frames correspond to odd (top) fields (`0.0`, default) or even (bottom) fields (`1.0`). If you see reversed field order or judder during interlaced content in bob mode, toggle this parameter.
 
-## RGB/YIQ bandwidth
+## Analog signal simulation
 
-These options can simulate the limited bandwidth of an analog signal. This results in horizontal blurring of the final image. Lower bandwidths lead to more blurring. Different systems may have different quality outputs, and you may want to adjust these parameters based on your tastes.
+The preset determines which connection is simulated:
 
-The "Composite" parameter specifies whether to simulate an RGB connection (0.0) or a composite/s-video connection using the YIQ color space (1.0).
+- `crt-beans-rgb`: filters the red, green, and blue signals independently.
+- `crt-beans-s-video`: filters brightness (luma) and color (chroma) separately, using YUV.
+- `crt-beans-ntsc`: encodes and decodes an NTSC composite signal, including interactions between brightness and color that can produce dot crawl and false colors.
+- `crt-beans-vga` and `crt-beans-fast`: do not apply analog signal filtering.
 
-These options are only available for in the crt-beans-rgb and crt-beans-s-video presets.
+### Signal bandwidth
+
+Bandwidth controls horizontal detail. Lower values produce more horizontal blurring. Luma bandwidth controls brightness detail, while chroma bandwidth controls color detail and bleeding across edges.
+
+All bandwidth values are in MHz.
+
+| Parameter | Preset | Default | Range |
+| --- | --- | --- | --- |
+| Video bandwidth | RGB | 4.0 | 0.6–6.0 |
+| Luma bandwidth | S-Video and NTSC | 4.0 | 0.6–6.0 |
+| Chroma bandwidth | S-Video | 1.2 | 0.6–1.6 |
+| Chroma bandwidth | NTSC | 1.2 | 0.6–6.0 |
+
+Video bandwidth applies the same filtering to all three RGB channels. Chroma bandwidth applies the same filtering to both color channels.
+
+In the NTSC preset, these parameters control filtering before the signals are combined into composite video. The decoder also applies a fixed chroma low-pass filter of approximately 1.3 MHz, so increasing chroma bandwidth does not remove all color blurring.
+
+### Composite Y/C filter
+
+Available only in `crt-beans-ntsc`.
+
+This parameter controls how the decoder separates brightness (Y) from color (C):
+
+- **Notch (0.0):** A simple notch filter as found on early TVs. This is the blurriest option.
+- **Comb (1.0):** A simple 3-line comb filter as found on high end TVs in the 80's, and common in the 90's. This is a sharper option but causes artifacts on horizontal edges (on some consoles more than others).
+- **Adaptive comb (2.0, default):** A 2D adaptive comb filter as found on TVs in the late 90's into the 2000's. This should avoid most of the artifacts of the 3-line comb but might not be as sharp.
+
+In bob and weave modes on interlaced input, comb filtering uses neighboring scanlines from the same field.
+
+### NTSC system
+
+Available only in `crt-beans-ntsc`.
+
+This parameter selects the timing model used for the color subcarrier:
+
+| Value | System |
+| --- | --- |
+| 0.0 | Standard NTSC (default) |
+| 1.0 | NES |
+| 2.0 | Master System |
+| 3.0 | PC Engine / TurboGrafx-16 |
+| 4.0 | Genesis / Mega Drive |
+| 5.0 | SNES |
+| 6.0 | Saturn |
+| 7.0 | PlayStation |
+| 8.0 | Nintendo 64 |
+
+This changes the subcarrier spacing across the image, its phase relationship between lines and frames, and the alignment used by the comb filter. It can therefore change artifact patterns as well as their movement.
+
+Choose the system being emulated, or Standard NTSC for a generic timing model. Several models infer the video mode from the input width, so use the core's native output resolution where possible (i.e. turn off any upscaling).

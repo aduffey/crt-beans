@@ -1,0 +1,12 @@
+[project]
+name = "crt-beans"
+version = "0.1.0"
+requires-python = ">=3.12, <3.14"
+dependencies = [
+    "imageio>=2.37.4",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "scikit-image>=0.26.0",
+    "taichi>=1.7.4",
+]
+

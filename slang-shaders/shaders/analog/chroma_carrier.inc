@@ -9,8 +9,6 @@ struct chroma_info {
     float offset_per_frame;
 };
 
-// TODO handle interlacing
-//
 // NOTE: The chroma phases may not be accurate in an absolute sense. We can't
 // we can't really tell when the chroma clock started, so we just set 0 to be
 // the first input sample. So the phase may be off by some amount. This won't
@@ -47,16 +45,49 @@ chroma_info chroma_info_nes(vec4 original_size, uint frame_count) {
     //
     // See: https://www.nesdev.org/wiki/NTSC_video
 
-    // TODO handle if upscaled
     float periods_per_active_line = 4.0 / 6.0 * original_size.x;
     return chroma_info(periods_per_active_line, 682.0 / 3.0, 1.0 / 3.0);
 }
 
 chroma_info chroma_info_sms(vec4 original_size) {
     // Same as Genesis in H32 mode.
-    // TODO handle if upscaled
     float periods_per_active_line = 10.0 / 15.0 * original_size.x;
     return chroma_info(periods_per_active_line, 228.0, 0.0);
+}
+
+chroma_info chroma_info_pce(vec4 original_size) {
+    // The PC Engine/TurboGrafx-16 master clock (MCLK) is approximately
+    // 21.47727 MHz, or 6 times the NTSC chroma subcarrier frequency.
+    // The HuC6260 VCE divides MCLK by 4, 3, or 2 for dot clocks of
+    // approximately 5.37, 7.16, or 10.74 MHz, respectively. This gives
+    // 4/6, 3/6, or 2/6 chroma periods per pixel.
+    //
+    // A full line is 1365 MCLK cycles, including blanking, regardless
+    // of the dot-clock setting. Therefore, there are 1365 / 6 = 227.5
+    // chroma periods per line, giving a half-period phase shift between
+    // successive lines.
+    //
+    // The VCE supports 262 or 263 lines per non-interlaced frame.
+    // At 262 lines, 262 * 227.5 = 59605 chroma periods, so the phase
+    // repeats each frame. At 263 lines, 263 * 227.5 = 59832.5 periods,
+    // so the phase flips each frame. We can't tell from the core output
+    // which line count a game is using, so we will assume 263, which seems
+    // to be more common and will result in cleaner output.
+    //
+    // See:
+    // https://raw.githubusercontent.com/mamedev/mame/master/src/devices/video/huc6260.cpp
+    // https://www.pcengine-fx.com/forums/index.php?topic=11550.0
+    // https://pcengine.proboards.com/thread/639/screen-resolution-setup-sprite-limits?page=2
+
+    // Default to 512 px mode (2/6 cycles per dot)
+    float periods_per_active_line = 2.0 / 6.0 * original_size.x;
+    if (original_size.x <= 280.0) { // 256px mode (4/6 cycles per dot)
+        periods_per_active_line = 4.0 / 6.0 * original_size.x;
+    } else if (original_size.x <= 375.0) { // 320/352px mode (3/6 cycles per dot)
+        periods_per_active_line = 3.0 / 6.0 * original_size.x;
+    }
+
+    return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
 
 chroma_info chroma_info_genesis(vec4 original_size) {
@@ -106,11 +137,9 @@ chroma_info chroma_info_snes(vec4 original_size, uint frame_count) {
     //
     // See: https://wiki.superfamicom.org/timing
 
-    float periods_per_active_line;
-    // TODO handle if upscaled
-    if (original_size.x > 300) { // 512
-        periods_per_active_line = 2.0 / 6.0 * original_size.x;
-    } else { // 256
+    // Default to 512 px mode.
+    float periods_per_active_line = 2.0 / 6.0 * original_size.x;
+    if (original_size.x < 300) { // 256 px mode
         periods_per_active_line = 4.0 / 6.0 * original_size.x;
     }
     return chroma_info(periods_per_active_line, 682.0 / 3.0, 1.0 / 3.0);
@@ -137,21 +166,20 @@ chroma_info chroma_info_saturn(vec4 original_size) {
     // https://web.archive.org/web/20151218032848/http://dreamjam.co.uk/emuviews/sat/sattech.txt
     // https://junkerhq.net/xrgb/index.php?title=Optimal_timings
 
-    float periods_per_active_line;
-    // TODO handle if upscaled
-    if (original_size.x < 352) { // 320px mode? TODO border?
+    // These bounds should work for most Saturn cores.
+    // Default to 704 px mode.
+    float periods_per_active_line = original_size.x / 4.0;
+    if (original_size.x < 340) { // 320px mode
         periods_per_active_line = 65.0 / (2.0 * 61.0) * original_size.x;
-    } else if (original_size.x < 640) { // 352px mode
+    } else if (original_size.x < 400) { // 352px mode
         periods_per_active_line = original_size.x / 2.0;
-    } else if (original_size.x < 704) { // 640px mode TODO border?
+    } else if (original_size.x < 680) { // 640px mode
         periods_per_active_line = 65.0 / (4.0 * 61.0) * original_size.x;
-    } else { // 704px mode
-        periods_per_active_line = original_size.x / 4.0;
     }
     return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
 
-chroma_info chroma_info_psx() {
+chroma_info chroma_info_psx(vec4 original_size) {
     // The PSX timings are not entirely clear, and different hardware revisions
     // derived the clocks differently. What follows is some conjecture and
     // estimation that may result in something close enough.
@@ -178,13 +206,25 @@ chroma_info chroma_info_psx() {
     //     512 px: /5
     //     640 px: /4
     //
-    // All of these work out to an active line time of *around* 171 chroma
-    // periods, although all are very slightly different. We'll just assume
-    // that 171 is close enough.
+    // 256, 320, 512, and 640 modes all simplify to 512 / 3 periods per active
+    // line. The 368 mode is slightly different.
     //
-    // https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#gpu-timings
+    // See: https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#gpu-timings
 
-    return chroma_info(171, 227.5, 0.5);
+    // These bounds should work with SwanStation and Beetle PSX, at least.
+    // It's not clear if other cores might add more padding.
+    // Default to 640 px mode for high resolutions.
+    float periods_per_active_line = original_size.x * 4.0 / 15.0;
+    if (original_size.x <= 280.0) {
+        periods_per_active_line = original_size.x * 5.0 / 15.0;
+    } else if (original_size.x <= 350.0) {
+        periods_per_active_line = original_size.x * 7.0 / 15.0;
+    } else if (original_size.x <= 400.0) {
+        periods_per_active_line = original_size.x * 8.0 / 15.0;
+    } else if (original_size.x <= 560.0) {
+        periods_per_active_line = original_size.x * 10.0 / 15.0;
+    }
+    return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
 
 chroma_info chroma_info_n64() {
@@ -212,12 +252,10 @@ chroma_info get_chroma_info(float system, vec4 original_size, uint frame_count) 
         // SMS
         return chroma_info_sms(original_size);
     } else if (system < 3.5) {
-        // TurboGrafx-16
-        // TODO
-        // See: https://pcengine.proboards.com/thread/639/screen-resolution-setup-sprite-limits?page=2
-        return chroma_info_standard();
+        // PCE/TG16
+        return chroma_info_pce(original_size);
     } else if (system < 4.5) {
-        // Genesis
+        // Genesis/MD
         return chroma_info_genesis(original_size);
     } else if (system < 5.5) {
         // SNES
@@ -227,7 +265,7 @@ chroma_info get_chroma_info(float system, vec4 original_size, uint frame_count) 
         return chroma_info_saturn(original_size);
     } else if (system < 7.5) {
         // PS1
-        return chroma_info_psx();
+        return chroma_info_psx(original_size);
     } else if (system < 8.5) {
         // N64
         return chroma_info_n64();
@@ -236,9 +274,57 @@ chroma_info get_chroma_info(float system, vec4 original_size, uint frame_count) 
     return chroma_info_standard();
 }
 
+bool is_interlaced(float interlacing_type, vec4 source_size) {
+    return interlacing_type < 1.5 && source_size.y > 300.0;
+}
+
 float chroma_carrier(float t, float line, uint frame_count, chroma_info info) {
     float position_offset = fract(info.periods_per_active_line * t);
     float line_offset = fract(info.periods_per_line) * line;
-    float frame_offset = info.offset_per_frame * (frame_count % 2);
+    float frame_offset = info.offset_per_frame * float(frame_count % 2u);
     return 2.0 * PI * (position_offset + line_offset + frame_offset);
+}
+
+float chroma_carrier_interlaced(float t, float line, uint frame_count, chroma_info info, float odd_field_first) {
+    float position_offset = fract(info.periods_per_active_line * t);
+    uint y = uint(line);
+    uint is_even_field = y & 1u;
+    float field_line = float(y >> 1u);
+    uint phase_shift = (odd_field_first > 0.5) ? 1u : 0u;
+    uint effective_frame = frame_count + phase_shift;
+
+    // Computing interlaced_frame as this way evaluates the 30 Hz frame index
+    // at which that specific field was rendered, ensuring the carrier phase
+    // of the stale field remains invariant until the core updates it.
+    uint interlaced_frame = ((effective_frame + 4u - is_even_field) >> 1u) & 1u;
+
+    // Standard 525-line NTSC frames consist of an odd field followed by an even
+    // field 263 lines later, followed by the next odd field 262 lines later
+    // (263 + 262 = 525 lines per 2-field frame).
+    // The subcarrier accumulates fract(periods_per_line) phase per raster line.
+    // For all supported systems, this fraction has a denominator dividing 6:
+    //   - Standard / PS1 / Saturn / N64: fract = 1/2 (denominator 2)
+    //   - SNES: fract = 1/3 (denominator 3)
+    //   - Genesis: fract = 0 (denominator 1)
+    // Since 6 raster lines always contain an exact integer number of subcarrier
+    // cycles (6 * 1/2 = 3, 6 * 1/3 = 2), line offsets can be evaluated modulo 6
+    // without changing the phase:
+    //   - Even field offset: 263 lines = 5 mod 6
+    //   - Next frame offset: 525 lines = 3 mod 6
+    // This produces the correct 4-field phase patterns at field start:
+    //   - SNES:     [0, 2/3, 0, 2/3]
+    //   - Standard: [0, 1/2, 1/2, 0]
+    //   - Genesis:  [0, 0, 0, 0]
+    uint raw_offset = 3u * interlaced_frame + 5u * is_even_field;
+    uint field_line_offset = (raw_offset >= 6u) ? (raw_offset - 6u) : raw_offset;
+    float line_offset = fract(info.periods_per_line) * (field_line + float(field_line_offset));
+    return 2.0 * PI * (position_offset + line_offset);
+}
+
+float chroma_carrier(float t, float line, uint frame_count, chroma_info info, bool interlaced, float odd_field_first) {
+    if (interlaced) {
+        return chroma_carrier_interlaced(t, line, frame_count, info, odd_field_first);
+    } else {
+        return chroma_carrier(t, line, frame_count, info);
+    }
 }

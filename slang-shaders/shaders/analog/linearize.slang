@@ -27,14 +27,10 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
-#define CRT_GAMMA 2.4
-
-vec3 gamma_to_linear(vec3 rgb) {
-    return pow(clamp(rgb, 0.0, 1.0), vec3(CRT_GAMMA));
-}
+#include "../colorspace/conversions.inc"
 
 void main() {
     ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
     vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
-    FragColor.rgb = gamma_to_linear(rgb);
+    FragColor.rgb = gamma_to_linear(rgb, CRT_GAMMA);
 }

@@ -13,9 +13,11 @@ layout(push_constant) uniform Push {
     float ChromaBandwidth;
     float System;
     uint FrameCount;
+    float InterlacingType;
+    float OddFieldFirst;
 } params;
 
-#pragma format R16_SFLOAT
+#pragma format R16G16B16A16_SFLOAT
 
 #include "parameters_ntsc.inc"
 
@@ -38,6 +40,7 @@ layout(binding = 1) uniform sampler2D Source;
 #include "filter.inc"
 
 void main() {
+    // Filter
     // Systems may have different active line times, so we'll use that to
     // adjust the kernel size for the filter.
     chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
@@ -47,7 +50,15 @@ void main() {
     vec3 filtered = low_pass(L, vTexCoord, params.SourceSize, Source);
 
     // Modulate
+    // We'll ignore the 7.5 IRE setup and rescaling to 100 IRE because it
+    // doesn't really affect the demodulation. It's just inconvenient to deal
+    // with.
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
-    float carrier = chroma_carrier(vTexCoord.x, texel_loc.y, params.FrameCount, ci);
-    FragColor.r = dot(filtered, vec3(1.0, cos(carrier), sin(carrier)));
+    bool interlaced = is_interlaced(params.InterlacingType, params.SourceSize);
+    float carrier = chroma_carrier(vTexCoord.x, float(texel_loc.y), params.FrameCount, ci, interlaced, params.OddFieldFirst);
+    float composite = dot(filtered, vec3(1.0, sin(carrier), cos(carrier)));
+
+    // We'll just demodulate here, too, to save a pass.
+    vec2 chroma = composite * vec2(2.0 * sin(carrier), 2.0 * cos(carrier));
+    FragColor.rgb = vec3(composite, chroma.r, chroma.g);
 }

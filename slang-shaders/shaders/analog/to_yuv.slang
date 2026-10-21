@@ -27,16 +27,12 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
-#define GAMMA_YIQ_MAT mat3x3(0.30, 0.599, 0.213, 0.59, -0.2773, -0.5251, 0.11, -0.3217, 0.3121)
-
-vec3 gamma_to_yiq(vec3 rgb) {
-    return GAMMA_YIQ_MAT * rgb;
-}
+#include "../colorspace/conversions.inc"
 
 void main() {
     ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
     vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
 
     // We assume the input is in native CRT gamma.
-    FragColor.rgb = gamma_to_yiq(rgb);
+    FragColor.rgb = gamma_to_yuv(rgb);
 }
