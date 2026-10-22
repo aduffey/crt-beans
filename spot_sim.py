@@ -470,7 +470,7 @@ def _kernel_spot_fast_horizontal_fragment(field_in: ti.template(), field_out: ti
         delta = 2.0 * delta
 
     for y, x in field_out:
-        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        vTexCoord = tm.vec2((1.0 - overscan_horizontal) * ((x + 0.5) / out_width - 0.5) + 0.5, (y + 0.5) / out_height)
         field_out[y, x] = spot_sim_fast_horizontal(vTexCoord, field_in, SourceSize, OutputSize, delta, max_spot_size, min_spot_size)
     return
 
@@ -531,8 +531,8 @@ def spot_sim_fast_vertical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputS
                            max_spot_size: float, min_spot_size: float,
                            overscan_horizontal: float, overscan_vertical: float,
                            interlace_mode: int, odd_field_first: int, frame_count: int) -> tm.vec3:
-    # Overscan
-    vTexCoord = (1.0 - tm.vec2(overscan_horizontal, overscan_vertical)) * (vTexCoord - 0.5) + 0.5
+    # Overscan (horizontal overscan is handled in the horizontal pass)
+    vTexCoord = tm.vec2(vTexCoord.x, (1.0 - overscan_vertical) * (vTexCoord.y - 0.5) + 0.5)
 
     output = tm.vec3(0.0)
     if interlace_mode == 2 and SourceSize.y < 350.0:
@@ -652,7 +652,7 @@ def _kernel_spot_fast2_horizontal_fragment(field_in: ti.template(), energy_out: 
         delta = 2.0 * delta
 
     for y, x in energy_out:
-        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        vTexCoord = tm.vec2((1.0 - overscan_horizontal) * ((x + 0.5) / out_width - 0.5) + 0.5, (y + 0.5) / out_height)
         energy_out[y, x], width_out[y, x] = spot_sim_fast2_horizontal(vTexCoord, field_in, SourceSize, OutputSize, delta,
                                                                       max_spot_size, min_spot_size)
     return
@@ -785,8 +785,8 @@ def spot_sim_fast2_vertical(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4
                             max_spot_size: float, min_spot_size: float,
                             overscan_horizontal: float, overscan_vertical: float,
                             interlace_mode: int, odd_field_first: int, frame_count: int) -> tm.vec3:
-    # Overscan
-    vTexCoord = (1.0 - tm.vec2(overscan_horizontal, overscan_vertical)) * (vTexCoord - 0.5) + 0.5
+    # Overscan (horizontal overscan is handled in the horizontal pass)
+    vTexCoord = tm.vec2(vTexCoord.x, (1.0 - overscan_vertical) * (vTexCoord.y - 0.5) + 0.5)
 
     output = tm.vec3(0.0)
     if interlace_mode == 2 and SourceSize.y < 350.0:

@@ -539,6 +539,24 @@ class TestScanlineMethods(unittest.TestCase):
         with self.assertRaises(ValueError):
             spot_sim.simulate_spot(self.img, self.out_dim, 'unknown_method', 0.9, 0.4, 0.0, 0.0)
 
+    def test_overscan_spot_simulation(self):
+        img = np.zeros((24, 32, 3), dtype=np.float32)
+        img[:, 10:22, :] = 1.0
+        out_dim = (120, 160, 3)
+        for method in ['fast', 'sampled', 'analytical']:
+            with self.subTest(method=method):
+                out_overscan = spot_sim.simulate_spot(
+                    img, out_dim, method, 0.9, 0.4, 0.05, 0.05,
+                )
+                self.assertEqual(out_overscan.shape, out_dim)
+                self.assertTrue(np.all(np.isfinite(out_overscan)))
+                self.assertGreater(float(np.mean(out_overscan)), 0.0)
+
+                out_no_overscan = spot_sim.simulate_spot(
+                    img, out_dim, method, 0.9, 0.4, 0.0, 0.0,
+                )
+                self.assertGreater(float(np.max(np.abs(out_overscan - out_no_overscan))), 1e-3)
+
     def test_interlaced_spot_simulation(self):
         img_480 = np.full((480, 32, 3), 0.5, dtype=np.float32)
         out_dim = (480, 64, 3)

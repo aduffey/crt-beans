@@ -37,8 +37,11 @@ layout(location = 1) out vec2 viewportCoord;
 void main() {
     gl_Position = MVP * Position;
 
-    // Handle overscan.
-    vTexCoord = (1.0 - vec2(params.OverscanHorizontal, params.OverscanVertical)) * (TexCoord - 0.5) + 0.5;
+    // Handle overscan (horizontal overscan is handled in scanline_horizontal).
+    vTexCoord = vec2(
+        TexCoord.x,
+        (1.0 - params.OverscanVertical) * (TexCoord.y - 0.5) + 0.5
+    );
 
     // The viewport coordinates (*not* processed for overscan).
     // We need this for the mask.

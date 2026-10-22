@@ -29,7 +29,12 @@ layout(location = 1) flat out float delta;
 
 void main() {
     gl_Position = MVP * Position;
-    vTexCoord = TexCoord;
+
+    // Handle horizontal overscan (vertical overscan is handled in the vertical pass).
+    vTexCoord = vec2(
+        (1.0 - params.OverscanHorizontal) * (TexCoord.x - 0.5) + 0.5,
+        TexCoord.y
+    );
 
     // Distance units are *scanlines heights*. delta is the distance between
     // samples on the x-axis, and has to be adjusted by the aspect ratio.
