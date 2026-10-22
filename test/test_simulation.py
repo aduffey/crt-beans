@@ -437,22 +437,22 @@ class TestAnalogSimulation(unittest.TestCase):
 
         # PSX
         psx_256 = filtering.chroma_info_psx(256.0)
-        self.assertAlmostEqual(psx_256.periods_per_active_line, 256.0 * 5.0 / 15.0)
+        self.assertAlmostEqual(psx_256.periods_per_active_line, 256.0 * 10.0 / 15.0)
         self.assertAlmostEqual(psx_256.periods_per_line, 227.5)
         self.assertAlmostEqual(psx_256.offset_per_frame, 0.5)
 
         psx_320 = filtering.chroma_info_psx(320.0)
-        self.assertAlmostEqual(psx_320.periods_per_active_line, 320.0 * 7.0 / 15.0)
+        self.assertAlmostEqual(psx_320.periods_per_active_line, 320.0 * 8.0 / 15.0)
         self.assertAlmostEqual(psx_320.periods_per_line, 227.5)
         self.assertAlmostEqual(psx_320.offset_per_frame, 0.5)
 
         psx_368 = filtering.chroma_info_psx(368.0)
-        self.assertAlmostEqual(psx_368.periods_per_active_line, 368.0 * 8.0 / 15.0)
+        self.assertAlmostEqual(psx_368.periods_per_active_line, 368.0 * 7.0 / 15.0)
         self.assertAlmostEqual(psx_368.periods_per_line, 227.5)
         self.assertAlmostEqual(psx_368.offset_per_frame, 0.5)
 
         psx_512 = filtering.chroma_info_psx(512.0)
-        self.assertAlmostEqual(psx_512.periods_per_active_line, 512.0 * 10.0 / 15.0)
+        self.assertAlmostEqual(psx_512.periods_per_active_line, 512.0 * 5.0 / 15.0)
         self.assertAlmostEqual(psx_512.periods_per_line, 227.5)
         self.assertAlmostEqual(psx_512.offset_per_frame, 0.5)
 
@@ -481,6 +481,35 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertEqual(filtering.get_chroma_info('ps1', 320.0), psx_320)
         self.assertEqual(filtering.get_chroma_info('psx', 320.0), psx_320)
         self.assertEqual(filtering.get_chroma_info('n64', 640.0), n64)
+
+    def test_psx_active_line_duration_across_modes(self):
+        # These native modes all display 2560 GPU clocks per active line.
+        for width in [256, 320, 512, 640]:
+            with self.subTest(width=width):
+                ci = filtering.get_chroma_info('ps1', width)
+                self.assertAlmostEqual(ci.periods_per_active_line, 2560.0 / 15.0)
+
+        # The 368-pixel mode uses seven GPU clocks per pixel.
+        ci = filtering.get_chroma_info('ps1', 368)
+        self.assertAlmostEqual(ci.periods_per_active_line, 2576.0 / 15.0)
+
+        # Padded captures span 2800 clocks, regardless of pixel-clock mode.
+        for width in [280, 350, 400, 560, 700]:
+            with self.subTest(capture_width=width):
+                ci = filtering.get_chroma_info('ps1', width)
+                self.assertAlmostEqual(ci.periods_per_active_line, 2800.0 / 15.0)
+                self.assertLess(ci.periods_per_active_line, ci.periods_per_line)
+                self.assertAlmostEqual(ci.periods_per_line, 227.5)
+                self.assertAlmostEqual(ci.offset_per_frame, 0.5)
+
+    def test_psx_capture_mode_boundaries(self):
+        # A width just beyond a padded mode selects the next pixel clock.
+        for width, clocks_per_pixel in [(281, 8), (351, 7), (401, 5), (561, 4)]:
+            with self.subTest(width=width):
+                ci = filtering.get_chroma_info('psx', width)
+                self.assertAlmostEqual(
+                    ci.periods_per_active_line, width * clocks_per_pixel / 15.0,
+                )
 
 
 class TestScanlineMethods(unittest.TestCase):
@@ -535,6 +564,53 @@ class TestScanlineMethods(unittest.TestCase):
             self.assertEqual(out.shape, out_dim)
             self.assertTrue(np.all(np.isfinite(out)))
             self.assertGreater(float(np.mean(out)), 0.0)
+
+    def test_vga_progressive_threshold_and_field_invariance(self):
+        # Different neighboring rows expose accidental bob field selection.
+        for height in [349, 350, 400, 480]:
+            img = np.full((height, 8, 3), 0.1, dtype=np.float32)
+            img[::2] = 0.8
+            out_dim = (height * 2, 16, 3)
+            # Reuse fields across modes/phases to avoid accumulating Taichi
+            # field trees for every render in the full suite.
+            field_in = spot_sim.ti.Vector.field(n=3, dtype=float, shape=img.shape[:2])
+            field_in.from_numpy(img)
+            field_out = spot_sim.ti.Vector.field(n=3, dtype=float, shape=out_dim[:2])
+            energy = spot_sim.ti.Vector.field(n=3, dtype=float, shape=(height, 16))
+            width = spot_sim.ti.Vector.field(n=3, dtype=float, shape=(height, 16))
+
+            def render(method, mode, frame=0, odd_first=1):
+                if method == 'fast':
+                    spot_sim.taichi_spot_fast2_horizontal_fragment(
+                        field_in, energy, width, 0.9, 0.4, 0.0, 0.0,
+                        out_dim[1] / out_dim[0], mode,
+                    )
+                    spot_sim.taichi_spot_fast2_vertical_fragment(
+                        energy, width, field_out, 0.9, 0.4, 0.0, 0.0,
+                        mode, odd_first, frame,
+                    )
+                else:
+                    fragment = (spot_sim.taichi_spot_fragment if method == 'sampled'
+                                else spot_sim.taichi_spot_analytical_fragment)
+                    fragment(field_in, field_out, 0.9, 0.4, 0.0, 0.0,
+                             mode, odd_first, frame)
+                return field_out.to_numpy()
+
+            for method in ['sampled', 'analytical', 'fast']:
+                with self.subTest(height=height, method=method):
+                    progressive = render(method, 3)
+                    vga = render(method, 2)
+                    self.assertEqual(vga.shape, out_dim)
+                    self.assertTrue(np.all(np.isfinite(vga)))
+                    self.assertGreater(float(np.mean(vga)), 0.0)
+                    if height >= 350:
+                        np.testing.assert_allclose(vga, progressive, rtol=1e-5, atol=1e-6)
+                    else:
+                        self.assertGreater(float(np.max(np.abs(vga - progressive))), 1e-3)
+
+                    for frame, odd_first in [(1, True), (0, False)]:
+                        other_phase = render(method, 2, frame, int(odd_first))
+                        np.testing.assert_allclose(other_phase, vga, rtol=1e-5, atol=1e-6)
 
 
 class TestMaskTypes(unittest.TestCase):

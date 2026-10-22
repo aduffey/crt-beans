@@ -1,0 +1,26 @@
+shaders = 3
+
+MaskType = 0.0
+
+//======== Linearize gamma.
+shader0 = shaders/analog/linearize.slang
+alias0 = Linearized
+filter_linear0 = false
+mipmap_input0 = false
+scale_type0 = source
+scale0 = 1.0
+
+//======== Draw the scanlines, handling interlacing and overscan.
+shader1 = shaders/scanline_horizontal.slang
+filter_linear1 = false
+wrap_mode1 = clamp_to_border
+mipmap_input1 = false
+scale_type_x1 = viewport
+scale_x1 = 1.0
+scale_type_y1 = source
+scale_y1 = 1.0
+
+shader2 = shaders/scanline_vertical_output.slang
+filter_linear2 = false
+wrap_mode2 = clamp_to_border
+mipmap_input2 = false

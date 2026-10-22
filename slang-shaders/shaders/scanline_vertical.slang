@@ -24,6 +24,8 @@ layout(push_constant) uniform Push {
     float OutputGamma;
 } params;
 
+#pragma format R16G16B16A16_SFLOAT
+
 #include "parameters_common.inc"
 
 #pragma stage vertex

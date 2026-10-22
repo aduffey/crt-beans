@@ -19,7 +19,7 @@ layout(push_constant) uniform Push {
 
 #pragma format R32G32B32A32_UINT
 
-#include "parameters_common.inc"
+#include "parameters_fast.inc"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;

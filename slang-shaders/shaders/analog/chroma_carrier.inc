@@ -209,20 +209,20 @@ chroma_info chroma_info_psx(vec4 original_size) {
     // 256, 320, 512, and 640 modes all simplify to 512 / 3 periods per active
     // line. The 368 mode is slightly different.
     //
-    // See: https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#gpu-timings
+    // See: https://psx-spx.consoledev.net/dev/ps1/gpu/timings/
 
     // These bounds should work with SwanStation and Beetle PSX, at least.
     // It's not clear if other cores might add more padding.
     // Default to 640 px mode for high resolutions.
     float periods_per_active_line = original_size.x * 4.0 / 15.0;
     if (original_size.x <= 280.0) {
-        periods_per_active_line = original_size.x * 5.0 / 15.0;
-    } else if (original_size.x <= 350.0) {
-        periods_per_active_line = original_size.x * 7.0 / 15.0;
-    } else if (original_size.x <= 400.0) {
-        periods_per_active_line = original_size.x * 8.0 / 15.0;
-    } else if (original_size.x <= 560.0) {
         periods_per_active_line = original_size.x * 10.0 / 15.0;
+    } else if (original_size.x <= 350.0) {
+        periods_per_active_line = original_size.x * 8.0 / 15.0;
+    } else if (original_size.x <= 400.0) {
+        periods_per_active_line = original_size.x * 7.0 / 15.0;
+    } else if (original_size.x <= 560.0) {
+        periods_per_active_line = original_size.x * 5.0 / 15.0;
     }
     return chroma_info(periods_per_active_line, 227.5, 0.5);
 }

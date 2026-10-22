@@ -56,6 +56,8 @@ These parameters control the glow simulation. In this case, "glow" refers to the
 
 Glow is implemented with an approximation of a gaussian blur mixed into the image. The width is the standard deviation of the gaussian to use (in proportion to screen height). The amount is the mix ratio of the blurred image to the original image. For example, a glow amount of 0.05 means the image is a mix of 5% blurred image and 95% original image.
 
+Glow controls are available only in the full presets; the fast presets omit glow.
+
 ## Interlacing
 
 Interlacing simulation is controlled by two parameters: `InterlacingType` (mode) and `OddFieldFirst` (field phase).
@@ -77,6 +79,8 @@ Draws both the odd and even fields and blends them together, avoiding the flicke
 #### VGA (2.0)
 
 Enables [VGA line doubling](https://github.com/dosbox-staging/dosbox-staging/issues/2283#issue-1589164907). When the vertical input resolution is below 350, each line is doubled. For example, [DOS mode 13h](https://en.wikipedia.org/wiki/Mode_13h) games have a vertical resolution of 200 and will be drawn with 400 scanlines.
+
+At 350 lines and above, VGA mode draws the input progressively without interlacing.
 
 #### Off (3.0)
 

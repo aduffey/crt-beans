@@ -214,7 +214,7 @@ void main() {
                 combed_dir = 0.5 * (middle_chroma + upper_chroma);
             }
 
-            float w_comb = 1.0 - smoothstep(0.04, 0.18, diff_min);
+            float w_comb = 1.0 - smoothstep(0.06, 0.24, diff_min);
 
             chroma = mix(middle_chroma, combed_dir, w_comb);
         }

@@ -33,7 +33,7 @@ vec3 render_scanlines(vec2 vTexCoord, vec2 viewportCoord) {
         // VGA line doubling
         lines_t lines = get_doubled_lines(vTexCoord.y, params.SourceSize);
         value = scanlines(lines, vTexCoord.x);
-    } else if (params.InterlacingType == 3.0 || params.SourceSize.y <= 300.0) {
+    } else if (params.InterlacingType >= 2.0 || params.SourceSize.y <= 300.0) {
         // no interlacing
         lines_t lines = get_closest_lines(vTexCoord.y, params.SourceSize);
         value = scanlines(lines, vTexCoord.x);

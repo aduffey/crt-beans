@@ -136,7 +136,7 @@ def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
     if interlace_mode == 2 and SourceSize.y < 350.0:
         lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_sampled(vTexCoord, img, SourceSize, delta, lines, max_spot_size, min_spot_size)
-    elif interlace_mode == 3 or SourceSize.y <= 300.0:
+    elif interlace_mode >= 2 or SourceSize.y <= 300.0:
         lines = get_lines_closest(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_sampled(vTexCoord, img, SourceSize, delta, lines, max_spot_size, min_spot_size)
     elif interlace_mode == 1:
@@ -390,7 +390,7 @@ def spot_sim_analytical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize
     if interlace_mode == 2 and SourceSize.y < 350.0:
         lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_analytical(vTexCoord, img, SourceSize, delta, lines, max_spot_size, min_spot_size)
-    elif interlace_mode == 3 or SourceSize.y <= 300.0:
+    elif interlace_mode >= 2 or SourceSize.y <= 300.0:
         lines = get_lines_closest(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_analytical(vTexCoord, img, SourceSize, delta, lines, max_spot_size, min_spot_size)
     elif interlace_mode == 1:
@@ -538,7 +538,7 @@ def spot_sim_fast_vertical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputS
     if interlace_mode == 2 and SourceSize.y < 350.0:
         lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_fast(vTexCoord, img, SourceSize, lines, max_spot_size, min_spot_size)
-    elif interlace_mode == 3 or SourceSize.y <= 300.0:
+    elif interlace_mode >= 2 or SourceSize.y <= 300.0:
         lines = get_lines_closest(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_fast(vTexCoord, img, SourceSize, lines, max_spot_size, min_spot_size)
     elif interlace_mode == 1:
@@ -792,7 +792,7 @@ def spot_sim_fast2_vertical(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4
     if interlace_mode == 2 and SourceSize.y < 350.0:
         lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size)
-    elif interlace_mode == 3 or SourceSize.y <= 300.0:
+    elif interlace_mode >= 2 or SourceSize.y <= 300.0:
         lines = get_lines_closest(vTexCoord.y, SourceSize.y)
         output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size)
     elif interlace_mode == 1:

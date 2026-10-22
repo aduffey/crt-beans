@@ -67,15 +67,17 @@ def chroma_info_saturn(original_width: float) -> ChromaInfo:
 
 
 def chroma_info_psx(original_width: float) -> ChromaInfo:
+    # Pixel-clock divisors for 256/320/368/512/640 modes, with capture padding.
+    # The NTSC video clock is 15 times the chroma subcarrier frequency.
     periods_per_active_line = original_width * 4.0 / 15.0
     if original_width <= 280.0:
-        periods_per_active_line = original_width * 5.0 / 15.0
-    elif original_width <= 350.0:
-        periods_per_active_line = original_width * 7.0 / 15.0
-    elif original_width <= 400.0:
-        periods_per_active_line = original_width * 8.0 / 15.0
-    elif original_width <= 560.0:
         periods_per_active_line = original_width * 10.0 / 15.0
+    elif original_width <= 350.0:
+        periods_per_active_line = original_width * 8.0 / 15.0
+    elif original_width <= 400.0:
+        periods_per_active_line = original_width * 7.0 / 15.0
+    elif original_width <= 560.0:
+        periods_per_active_line = original_width * 5.0 / 15.0
     return ChromaInfo(periods_per_active_line, 227.5, 0.5)
 
 
@@ -417,7 +419,7 @@ def taichi_ntsc_decode_comb(
                 elif y >= height - line_step:
                     combed_dir = 0.5 * (middle_chroma + upper_chroma)
 
-                w_comb = 1.0 - tm.smoothstep(0.04, 0.18, diff_min)
+                w_comb = 1.0 - tm.smoothstep(0.06, 0.24, diff_min)
 
                 chroma = tm.mix(middle_chroma, combed_dir, w_comb)
 
