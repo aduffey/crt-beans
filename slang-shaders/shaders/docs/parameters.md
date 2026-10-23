@@ -94,9 +94,9 @@ Controls whether even-numbered frames correspond to odd (top) fields (`0.0`, def
 
 The preset determines which connection is simulated:
 
-- `crt-beans-rgb`: filters the red, green, and blue signals independently.
-- `crt-beans-s-video`: filters brightness (luma) and color (chroma) separately, using YUV.
-- `crt-beans-ntsc`: encodes and decodes an NTSC composite signal, including interactions between brightness and color that can produce dot crawl and false colors.
+- `crt-beans-rgb` and `crt-beans-fast-rgb`: filter the red, green, and blue signals independently.
+- `crt-beans-s-video` and `crt-beans-fast-s-video`: filter brightness (luma) and color (chroma) separately, using YUV.
+- `crt-beans-ntsc` and `crt-beans-fast-ntsc`: encode and decode an NTSC composite signal, including interactions between brightness and color that can produce dot crawl and false colors.
 - `crt-beans-vga` and `crt-beans-fast`: do not apply analog signal filtering.
 
 ### Signal bandwidth
@@ -118,7 +118,7 @@ In the NTSC preset, these parameters control filtering before the signals are co
 
 ### Composite Y/C filter
 
-Available only in `crt-beans-ntsc`.
+Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.
 
 This parameter controls how the decoder separates brightness (Y) from color (C):
 
@@ -130,7 +130,7 @@ In bob and weave modes on interlaced input, comb filtering uses neighboring scan
 
 ### NTSC system
 
-Available only in `crt-beans-ntsc`.
+Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.
 
 This parameter selects the timing model used for the color subcarrier:
 
