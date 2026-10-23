@@ -97,7 +97,8 @@ The preset determines which connection is simulated:
 - `crt-beans-rgb` and `crt-beans-fast-rgb`: filter the red, green, and blue signals independently.
 - `crt-beans-s-video` and `crt-beans-fast-s-video`: filter brightness (luma) and color (chroma) separately, using YUV.
 - `crt-beans-ntsc` and `crt-beans-fast-ntsc`: encode and decode an NTSC composite signal, including interactions between brightness and color that can produce dot crawl and false colors.
-- `crt-beans-vga` and `crt-beans-fast`: do not apply analog signal filtering.
+- `crt-beans` and `crt-beans-fast`: linearize the input without analog signal filtering.
+- `crt-beans-vga` and `crt-beans-fast-vga`: linearize the input without analog signal filtering, with VGA line handling, monitor-like spot sizes, and no mask by default.
 
 ### Signal bandwidth
 
