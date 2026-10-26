@@ -17,6 +17,7 @@ layout(push_constant) uniform Push {
     float OverscanHorizontal;
     float OverscanVertical;
     float MaskType;
+    float MaskSmoothness;
     float SubpixelMaskPattern;
     float SubpixelPattern;
     float DynamicMaskTriads;

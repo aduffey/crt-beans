@@ -128,13 +128,14 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
 //     output_size: <x_size, y_size, 1 / x_size, 1 / y_size>
 //         (equivalent to the Retroarch-provided OutputSize uniform)
 //     mask_triads: The number of phosphor triads to generate across the screen
+//     smoothness: Scales the kernel width from 1x (0) to 2x (1).
 //
 // Returns:
 //     A vec4 with the rgb components containing the rgb values to apply the
 //     mask on the current pixel, and the a component containing the mask
 //     coverage (the inverse of the integral of the mask). In this case, the
 //     mask coverage is always 3.0.
-vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
+vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads, float smoothness) {
     // Loops are unrolled and common terms collapsed for performance.
     const vec3[3] phosphors = {
         vec3(1.0, 0.0, 0.0),
@@ -142,8 +143,8 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
         vec3(0.0, 0.0, 1.0)
     };
     // All units are in terms of phosphors (i.e. 1 == phosphor width).
-    // Set the kernel radius to be one output pixel wide.
-    float kernel_radius = 3.0 * mask_triads * output_size.z;
+    // Set the kernel radius to one to two output pixels.
+    float kernel_radius = 3.0 * mask_triads * output_size.z * (1.0 + smoothness);
     float x = 3.0 * mask_triads * coord.x;
     vec3 mask = vec3(0.0);
     if (kernel_radius < 0.5) {
@@ -166,9 +167,7 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
                 (p2 - p1) * (x2 + sin(PI * x2) / PI);
         mask *= 0.5;
     }
-    else { // kernel_radius < 1.5
-        // For a kernel radius >= 1.5, we should have even more terms, but the
-        // mask starts to look bad before then anyway.
+    else if (kernel_radius < 1.5) {
         float x1 = clamp((x - (round(x) - 1.0)) / kernel_radius, -1.0, 1.0);
         float x2 = clamp((x - (round(x) + 0.0)) / kernel_radius, -1.0, 1.0);
         float x3 = clamp((x - (round(x) + 1.0)) / kernel_radius, -1.0, 1.0);
@@ -181,9 +180,46 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
                 (p2 - p1) * (x2 + sin(PI * x2) / PI) +
                 (p3 - p2) * (x3 + sin(PI * x3) / PI);
         mask *= 0.5;
+    } else {
+        // Wider kernels can span more than three phosphor edges. Integrate
+        // every transition inside the support of the raised cosine.
+        float start = floor(x - kernel_radius);
+        vec3 p0 = phosphors[int(mod(start, 3.0) + 1e-3)];
+        mask = p0;
+        for (float edge = start + 1.0; edge < x + kernel_radius; edge += 1.0) {
+            vec3 p1 = p0.brg;
+            float u = (x - edge) / kernel_radius;
+            mask += (p1 - p0) * (0.5 + 0.5 * (u + sin(PI * u) / PI));
+            p0 = p1;
+        }
     }
 
     return vec4(mask, 3.0);
+}
+
+// Harmonic aperture grille that phases in the first and second harmonics via
+// smoothstep based on the effective pixels per triad.
+vec4 dynamic2_aperture_grille(vec2 coord, vec4 output_size, float mask_triads, float smoothness) {
+    float p_eff = output_size.x / (mask_triads * (1.0 + smoothness));
+    float t1 = smoothstep(2.0, 3.0, p_eff);
+    float t2 = smoothstep(4.0, 6.0, p_eff);
+
+    float phase = 2.0 * PI * mask_triads * coord.x;
+    float cs = cos(phase);
+    float sn = sin(phase);
+    vec3 c1 = vec3(cs, -0.5 * cs + 0.86602540378 * sn, -0.5 * cs - 0.86602540378 * sn);
+    vec3 c2 = 2.0 * c1 * c1 - 1.0;
+
+    float dc = 1.0 - 0.5 * t1 - 0.125 * t2;
+    vec3 mask = dc + 0.5 * t1 * c1 + 0.125 * t2 * c2;
+    return vec4(mask, 1.0 / dc);
+}
+
+// Two white output pixels followed by one dark pixel, independent of subpixels.
+vec4 monochrome_mask(vec2 coord, vec4 output_size, float smoothness) {
+    float x = floor(coord.x * output_size.x);
+    float value = mod(x, 3.0) < 2.0 ? 1.0 : smoothness;
+    return vec4(vec3(value), 3.0 / (2.0 + smoothness));
 }
 
 // Blend the mask with the current pixel value and return the result.
@@ -222,6 +258,10 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
 // Returns:
 //     A vec3 with the rgb value of this pixel after applying the mask.
 vec3 blend_mask(vec3 mask, vec3 pixel_value, float mask_coverage, float mitigation) {
+    // A fully white monochrome mask has coverage 1 and needs no blending.
+    if (mask_coverage <= 1.0) {
+        return pixel_value;
+    }
     // Adjust the pixel value based on the mask strength. We want the strength
     // to range from 1 / mask_coverage (which will result in a pure mask with
     // no brightness loss mitigation) to 1.0 (which will result in full

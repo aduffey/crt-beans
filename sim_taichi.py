@@ -68,6 +68,7 @@ def simulate(img, config: SimulationConfig = None):
             config.tiled_mask_type,
             config.mask_triads,
             config.mask_amount,
+            mask_smoothness=config.mask_smoothness,
         )
     else:
         img_masked = img_spot
@@ -152,7 +153,7 @@ def build_parser():
                         default=DEFAULT_CONFIG.enable_masking,
                         help='Enable or disable CRT phosphor mask')
     parser.add_argument('--mask-type', '--mask', dest='mask_type',
-                        choices=['bandlimit', 'subpixel', 'coverage', 'additive', 'additive2', 'tiled', 'none'],
+                        choices=['bandlimit', 'dynamic', 'dynamic2', 'monochrome', 'subpixel', 'coverage', 'additive', 'additive2', 'tiled', 'none'],
                         default=DEFAULT_CONFIG.mask_type,
                         help='Type of phosphor mask to apply')
     parser.add_argument('--mask-pattern', dest='subpixel_mask_pattern', type=int, choices=[0, 1, 2, 3],
@@ -165,6 +166,8 @@ def build_parser():
                         help='Number of mask triads across screen')
     parser.add_argument('--mask-amount', type=float, default=DEFAULT_CONFIG.mask_amount,
                         help='Phosphor mask blend amount')
+    parser.add_argument('--mask-smoothness', type=float, default=DEFAULT_CONFIG.mask_smoothness,
+                        help='Mask smoothness from 0 to 1 (dynamic, dynamic2, monochrome)')
 
     # Diffusion options
     parser.add_argument('--diffusion', action=argparse.BooleanOptionalAction,
@@ -210,6 +213,7 @@ def main():
         tiled_mask_type=args.tiled_mask_type,
         mask_triads=args.mask_triads,
         mask_amount=args.mask_amount,
+        mask_smoothness=args.mask_smoothness,
         enable_diffusion=args.diffusion,
         diffusion_type=args.diffusion_type,
         blur_sigma=args.blur_sigma,

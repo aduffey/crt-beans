@@ -29,7 +29,8 @@ class SimulationConfig:
 
     # For masks
     enable_masking: bool = True
-    mask_type: str = 'bandlimit'  # 'bandlimit', 'subpixel', 'coverage', 'additive', 'tiled', 'none'
+    mask_type: str = 'bandlimit'  # 'dynamic'/'bandlimit', 'dynamic2', 'monochrome', 'subpixel', 'coverage', 'additive', 'additive2', 'tiled', 'none'
+    mask_smoothness: float = 0.0
     subpixel_mask_pattern: int = 1  # 0 for 2-pixel (1080p), 1 for 3-pixel (1440p), 2 for 4-pixel (4k), 3 for 5-pixel (4k)
     tiled_mask_type: str = 'slot'  # 'slot' or 'aperture'
     mask_triads: float = 550.0

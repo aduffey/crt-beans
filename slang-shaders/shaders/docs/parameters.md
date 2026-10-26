@@ -24,21 +24,41 @@ Note that the maximum spot size will affect the brightness of the overall image 
 
 This parameter sets the mask simulation type.
 
+| Value | Mask |
+| --- | --- |
+| 0 | Disabled |
+| 1 | Subpixel |
+| 2 | Dynamic (default) |
+| 3 | Dynamic2 |
+| 4 | Monochrome |
+
 The dynamic mask is the default. It will have the specified number of phosphor triads regardless of the output monitor's resolution, for a consistent "look" across devices. It does not depend on the monitor's subpixel arrangement, so it can be used on OLEDs with non-standard subpixels, in TATE mode (rotated), etc. Very low resolution monitors (especially lower than 1080p) may have trouble with the dynamic mask.
 
 The subpixel mask is an alternative for low resolution devices. Note that the number of phosphor triads that the subpixel mask simulates will vary depending on the output monitor's resolution. The "look" will therefore not be consistent across different resolutions. Because this mask type relies on awareness of the monitor's subpixel pattern, it will not work correctly for some monitors or orientations (e.g. TATE mode).
 
-Currently, both mask types (subpixel and dynamic) simulate an [aperture grille](https://en.wikipedia.org/wiki/Aperture_grille).
+Dynamic2 is an alternative dynamic [aperture grille](https://en.wikipedia.org/wiki/Aperture_grille) synthesized from up to the first two harmonics of the phosphor pulse wave. It interpolates between a flat DC mask (`1.0`), the first harmonic (`0.5 + 0.5 * cos(phase)`), and the first two harmonics (`3/8 + 1/2 * cos(phase) + 1/8 * cos(2 * phase)`) using `smoothstep` over the effective pixels per triad (`OutputSize.x / (mask_triads * (1 + smoothness))`), phasing in the first harmonic over `[2.0, 3.0]` and the second harmonic over `[4.0, 6.0]`. Like dynamic, it uses the dynamic mask triad count and does not regime-lock to the monitor's subpixel arrangement. Subpixel and dynamic also simulate aperture grilles.
+
+Monochrome repeats two white output pixels followed by one black output pixel horizontally. It applies the same mask value to all three color channels, preserving the input colors. Its three-pixel period is fixed, independent of the dynamic triad count and subpixel settings.
 
 Disabling the mask is recommended for low resolution devices with uncommon subpixel layouts (e.g. the Steam Deck OLED) or to simulate masks with very high phosphor density (e.g. good CRT monitors).
 
-Masks have no brightness cost. The underlying scanline is blended into the image in bright areas so that the brightness is not reduced.
+With mask brightness boost at 1.0, the underlying scanline is blended into the image in bright areas to compensate for the mask's brightness loss.
+
+### Mask smoothness
+
+Ranges from 0.0 (default) to 1.0:
+
+- **Dynamic:** scales the raised-cosine filter kernel width by `1 + smoothness`, from the original width at 0.0 to twice that width at 1.0.
+- **Dynamic2:** divides the effective pixels per triad by `1 + smoothness` when phasing in the first (`[2.0, 3.0]`) and second (`[4.0, 6.0]`) harmonics via `smoothstep`, raising the pixel-per-triad thresholds required for each harmonic by `1 + smoothness` while keeping the mask peak at `1.0` and updating mask coverage accordingly.
+- **Monochrome:** sets the dark pixel's linear-light value, from full black at 0.0 to full white at 1.0. The two white pixels stay white. At 1.0 the mask has no effect, regardless of brightness boost.
+
+Smoothness has no effect on the subpixel mask or when masking is disabled. The Python reference exposes the same control as `--mask-smoothness` with `--mask-type dynamic` (also called `bandlimit`), `dynamic2`, or `monochrome`.
 
 ### Dynamic mask triads
 
-This parameter controls the resolution of the phosphor mask for the dynamic mask type only. A value of 550 means that there will be 550 of each of the red, green, and blue phosphors across the simulated screen width.
+This parameter controls the resolution of the phosphor mask for both dynamic and dynamic2. A value of 550 means that there will be 550 of each of the red, green, and blue phosphors across the simulated screen width.
 
-This has no effect when the mask type is set to disabled or subpixel.
+This has no effect when the mask type is set to disabled, subpixel, or monochrome.
 
 ### Subpixel mask pattern and width
 

@@ -24,6 +24,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertTrue(cfg.enable_diffusion)
         self.assertEqual(cfg.scanline_method, DEFAULT_CONFIG.scanline_method)
         self.assertEqual(cfg.mask_type, 'bandlimit')
+        self.assertEqual(cfg.mask_smoothness, 0.0)
         self.assertEqual(cfg.diffusion_type, 'gaussian')
         self.assertEqual(cfg.output_resolution, (2160, 2880))
         self.assertEqual(cfg.max_spot_size, 0.9)
@@ -645,6 +646,100 @@ class TestMaskTypes(unittest.TestCase):
         out = masking.apply_mask(self.img, 'bandlimit', 1, 'slot', 550.0, 1.0)
         self.assertEqual(out.shape, self.img.shape)
         self.assertTrue(np.all(np.isfinite(out)))
+
+    def test_dynamic_smoothness_matches_raised_cosine_integration(self):
+        # Independently integrate a piecewise-constant RGB grille. Include
+        # all optimized kernel branches and widths beyond their support.
+        width = 1440
+        indices = np.arange(0, width, 37)
+        t = (np.arange(32768) + 0.5) * (2.0 / 32768) - 1.0
+        weights = (1.0 + np.cos(np.pi * t)) / len(t)
+        for triads in (180.0, 360.0, 550.0, 720.0, 800.0):
+            for smoothness in (0.0, 0.4, 1.0):
+                with self.subTest(triads=triads, smoothness=smoothness):
+                    mask, coverage = masking.generate_bandlimit_mask((1, width), triads, smoothness)
+                    radius = 3.0 * triads / width * (1.0 + smoothness)
+                    centers = 3.0 * triads * (indices + 0.5) / width
+                    phosphor = np.floor(centers[:, None] + radius * t).astype(int) % 3
+                    expected = np.stack([np.sum((phosphor == c) * weights, axis=1)
+                                         for c in range(3)], axis=-1)
+                    self.assertEqual(coverage, 3.0)
+                    self.assertTrue(np.all(np.isfinite(mask)))
+                    self.assertTrue(np.all((mask >= 0.0) & (mask <= 1.0)))
+                    np.testing.assert_allclose(mask[0, indices], expected, atol=3e-4)
+                    np.testing.assert_allclose(mask.sum(axis=-1), 1.0, atol=2e-6)
+
+    def test_dynamic2_harmonics_and_smoothness(self):
+        width = 1440
+
+        def smoothstep(a, b, x):
+            t = np.clip((x - a) / (b - a), 0.0, 1.0)
+            return t * t * (3.0 - 2.0 * t)
+
+        # Case 1: p_eff <= 2.0 -> DC only (mask == 1.0, coverage == 1.0)
+        dc_mask, dc_cov = masking.generate_dynamic2_mask((2, width), 720, smoothness=0.0)
+        self.assertEqual(dc_mask.shape, (2, width, 3))
+        self.assertEqual(dc_cov, 1.0)
+        np.testing.assert_array_equal(dc_mask, 1.0)
+
+        # Case 2: 3.0 <= p_eff <= 4.0 -> pure 1st harmonic (coverage == 2.0)
+        m1_mask, m1_cov = masking.generate_dynamic2_mask((2, width), 400, smoothness=0.0)
+        self.assertAlmostEqual(m1_cov, 2.0, places=6)
+        self.assertTrue(np.all((m1_mask >= 0.0) & (m1_mask <= 1.0)))
+        spectrum_m1 = np.fft.rfft(m1_mask[0] - 0.5, axis=0) / width
+        np.testing.assert_allclose(np.abs(spectrum_m1[400]), 0.25, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spectrum_m1[width - 800]), 0.0, atol=1e-6)
+
+        # Case 3: p_eff >= 6.0 -> full 1st + 2nd harmonics (coverage == 8/3)
+        m2_mask, m2_cov = masking.generate_dynamic2_mask((2, width), 180, smoothness=0.0)
+        self.assertAlmostEqual(m2_cov, 8.0 / 3.0, places=6)
+        self.assertTrue(np.all((m2_mask >= 0.0) & (m2_mask <= 1.0)))
+        spectrum_m2 = np.fft.rfft(m2_mask[0] - 0.375, axis=0) / width
+        np.testing.assert_allclose(np.abs(spectrum_m2[180]), 0.25, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spectrum_m2[360]), 0.0625, atol=1e-6)
+
+        # Case 4: Intermediate p_eff and smoothness tuning
+        for triads in (240.0, 300.0, 550.0):
+            for smoothness in (0.0, 0.25, 0.5, 1.0):
+                with self.subTest(triads=triads, smoothness=smoothness):
+                    mask, cov = masking.generate_dynamic2_mask((2, width), triads, smoothness)
+                    p_eff = width / (triads * (1.0 + smoothness))
+                    t1 = smoothstep(2.0, 3.0, p_eff)
+                    t2 = smoothstep(4.0, 6.0, p_eff)
+                    dc = 1.0 - 0.5 * t1 - 0.125 * t2
+                    self.assertAlmostEqual(cov, 1.0 / dc, places=6)
+                    self.assertTrue(np.all(np.isfinite(mask)))
+                    self.assertTrue(np.all((mask >= 0.0) & (mask <= 1.0)))
+                    np.testing.assert_allclose(mask.sum(axis=-1), 3.0 * dc, atol=2e-6)
+
+    def test_monochrome_smoothness_and_brightness(self):
+        for smoothness in (0.0, 0.5, 0.99999, 1.0):
+            mask, coverage = masking.generate_monochrome_mask((2, 1440), smoothness)
+            np.testing.assert_array_equal(mask[:, :2], 1.0)
+            np.testing.assert_allclose(mask[:, 2::3], smoothness)
+            np.testing.assert_allclose(mask.mean(axis=(0, 1)), 1 / coverage, atol=3e-5)
+            image = np.full_like(mask, [0.1, 0.3, 0.8])
+            for mitigation in (0.0, 0.5, 1.0):
+                out = masking.apply_mask(image, 'monochrome', mask_smoothness=smoothness,
+                                         mask_mitigation=mitigation)
+                self.assertTrue(np.all(np.isfinite(out)))
+                if smoothness == 1.0:
+                    np.testing.assert_array_equal(out, image)
+                elif mitigation == 0.0:
+                    np.testing.assert_allclose(out, image * mask, atol=1e-6)
+                elif mitigation == 1.0:
+                    np.testing.assert_allclose(out.mean(axis=1), image[:, 0], atol=3e-5)
+
+    def test_dynamic_dispatch_and_unaffected_subpixel(self):
+        image = self.img[:, :144]
+        for mode in ('dynamic', 'bandlimit', 'dynamic2', 'monochrome'):
+            for smoothness in (0.0, 0.5, 1.0):
+                out = masking.apply_mask(image, mode, mask_triads=24, mask_smoothness=smoothness)
+                self.assertEqual(out.shape, image.shape)
+                self.assertTrue(np.all(np.isfinite(out)))
+        np.testing.assert_array_equal(
+            masking.apply_mask(image, 'subpixel', mask_smoothness=0.0),
+            masking.apply_mask(image, 'subpixel', mask_smoothness=1.0))
 
     def test_coverage_mask(self):
         out = masking.apply_mask(self.img, 'coverage', 1, 'slot', 550.0, 1.0)
