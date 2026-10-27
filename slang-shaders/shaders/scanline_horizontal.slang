@@ -66,44 +66,51 @@ vec3 cubic_primitive(vec3 u) {
 }
 
 // Convolve s/w * k((x - t)/w) with a constant texel over [x0, x1].
-// The spot is zero outside radius w, which is also its full width at half
-// maximum. All distances are in scanline heights. Clamping the endpoints
-// extends the primitive constantly outside the spot's support.
-// The vertical spot and MaxSpotSize factor are applied in the vertical pass.
-vec3 spot_integral(vec3 sample_value, vec3 width, float x, float x0, float x1) {
+// dx0 = x - x0 and dx1 = x - x1 are the signed distances from the evaluation point.
+// All distances are in scanline heights.
+vec3 spot_integral(vec3 sample_value, vec3 width, float dx0, float dx1) {
     vec3 w_rcp = 1.0 / width;
-    vec3 u0 = clamp(w_rcp * (x - x0), -1.0, 1.0);
-    vec3 u1 = clamp(w_rcp * (x - x1), -1.0, 1.0);
+    vec3 u0 = clamp(w_rcp * dx0, -1.0, 1.0);
+    vec3 u1 = clamp(w_rcp * dx1, -1.0, 1.0);
     return sample_value * (cubic_primitive(u0) - cubic_primitive(u1));
 }
 
 void main() {
     vec3 energy = vec3(0.0);
     vec3 moment = vec3(0.0);
-    float start_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x - (params.MaxSpotSize / delta)) + 0.5);
-    float stop_x = params.SourceSize.z * (floor(vTexCoord.x * params.SourceSize.x + (params.MaxSpotSize / delta)) + 1.0);
-    float x = vTexCoord.x * params.SourceSize.x * delta;
-    for (float sample_x = start_x; sample_x < stop_x; sample_x += params.SourceSize.z) {
+
+    float min_width = params.MinSpotSize * params.MaxSpotSize;
+    float width_range = params.MaxSpotSize - min_width;
+    float radius = params.MaxSpotSize / delta;
+
+    float tex_x = vTexCoord.x * params.SourceSize.x;
+    int start_i = int(floor(tex_x - radius));
+    int stop_i  = int(floor(tex_x + radius));
+
+    for (int i = start_i; i <= stop_i; ++i) {
+        float sample_x = (float(i) + 0.5) * params.SourceSize.z;
         vec3 sample_value = textureLod(Source, vec2(sample_x, vTexCoord.y), 0.0).rgb;
-        float x0 = delta * (params.SourceSize.x * sample_x - 0.5);
-        float x1 = x0 + delta;
-        vec3 piece_width = (params.MinSpotSize * params.MaxSpotSize - sqrt(sample_value) * (params.MinSpotSize * params.MaxSpotSize - params.MaxSpotSize));
-        vec3 piece_energy = spot_integral(sample_value, piece_width, x, x0, x1);
+        float dx0 = (tex_x - float(i)) * delta;
+        float dx1 = dx0 - delta;
+        vec3 piece_width = min_width + sqrt(sample_value) * width_range;
+        vec3 piece_energy = spot_integral(sample_value, piece_width, dx0, dx1);
         energy += piece_energy;
         moment += piece_width * piece_energy;
     }
 
-    vec3 width = min(mix(vec3(params.MinSpotSize * params.MaxSpotSize), moment / energy, notEqual(energy, vec3(0.0))), vec3(params.MaxSpotSize));
-    // We actually only need the reciprocal of the width in the scanline pass.
-    // To avoid calculating it multiple times later on, we'll just do it here.
+    vec3 width = min(mix(vec3(min_width), moment / energy, notEqual(energy, vec3(0.0))), vec3(params.MaxSpotSize));
     vec3 width_rcp = 1.0 / width;
 
-    // Pack both energy and width_rcp into one texture. This avoids an extra
+    // Pre-multiply energy with MaxSpotSize * width_rcp to save vec3 multiplications
+    // per viewport pixel in the vertical scanline pass.
+    vec3 scaled_energy = energy * (params.MaxSpotSize * width_rcp);
+
+    // Pack both scaled_energy and width_rcp into one texture. This avoids an extra
     // pass (since we don't have multiple render target support) and allows
     // fewer texture samples in the next pass.
     FragColor.rgb = uvec3(
-        packHalf2x16(vec2(energy.r, width_rcp.r)),
-        packHalf2x16(vec2(energy.g, width_rcp.g)),
-        packHalf2x16(vec2(energy.b, width_rcp.b))
+        packHalf2x16(vec2(scaled_energy.r, width_rcp.r)),
+        packHalf2x16(vec2(scaled_energy.g, width_rcp.g)),
+        packHalf2x16(vec2(scaled_energy.b, width_rcp.b))
     );
 }

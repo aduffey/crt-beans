@@ -12,7 +12,7 @@ vec3 scanlines(lines_t lines, float u) {
     vec3 upper_width_rcp = vec3(upper_r.y, upper_g.y, upper_b.y);
 
     vec3 upper_y = clamp(abs(lines.upper_distance_y) * upper_width_rcp, 0.0, 1.0);
-    vec3 upper_value = upper_sample * upper_width_rcp * ((upper_y * upper_y) * (2.0 * upper_y - 3.0) + 1.0);
+    vec3 upper_value = upper_sample * ((upper_y * upper_y) * (2.0 * upper_y - 3.0) + 1.0);
 
     uvec3 lower_packed = textureLod(Source, vec2(u, lines.lower_sample_y), 0.0).rgb;
     vec2 lower_r = unpackHalf2x16(lower_packed.r);
@@ -22,9 +22,9 @@ vec3 scanlines(lines_t lines, float u) {
     vec3 lower_width_rcp = vec3(lower_r.y, lower_g.y, lower_b.y);
 
     vec3 lower_y = clamp(abs(lines.lower_distance_y) * lower_width_rcp, 0.0, 1.0);
-    vec3 lower_value = lower_sample * lower_width_rcp * ((lower_y * lower_y) * (2.0 * lower_y - 3.0) + 1.0);
+    vec3 lower_value = lower_sample * ((lower_y * lower_y) * (2.0 * lower_y - 3.0) + 1.0);
 
-    return params.MaxSpotSize * (upper_value + lower_value);
+    return upper_value + lower_value;
 }
 
 vec3 render_scanlines(vec2 vTexCoord, vec2 viewportCoord) {
