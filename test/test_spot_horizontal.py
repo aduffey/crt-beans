@@ -1,4 +1,4 @@
-"""Regression checks for the three energy/width spot approximations."""
+"""Regression checks for the cubic spot and three cosine width approximations."""
 import unittest
 
 import numpy as np
@@ -7,6 +7,12 @@ import taichi.math as tm
 
 import sim_taichi  # Initialize Taichi before creating fields, as in the main tests.
 import spot_sim
+
+
+@ti.func
+def cosine_horizontal(uv, source, source_size, output_size, delta, maximum, minimum):
+    return spot_sim.spot_sim_fast2_horizontal(
+        uv, source, source_size, output_size, delta, maximum, minimum, cubic_horizontal=False)
 
 
 @ti.kernel
@@ -31,6 +37,7 @@ class TestSpotHorizontalVariants(unittest.TestCase):
         source.from_numpy(image)
         results = []
         for implementation in [spot_sim.spot_sim_fast2_horizontal,
+                               cosine_horizontal,
                                spot_sim.spot_sim_fast3_horizontal,
                                spot_sim.spot_sim_fast4_horizontal]:
             evaluate_horizontal(source, energy, widths, implementation, .9, .4)
@@ -56,7 +63,7 @@ class TestSpotHorizontalVariants(unittest.TestCase):
     def test_mixed_intensities_share_energy_and_order_width_means(self):
         row = np.array([0, .01, .09, .25, .64, 1, .64, .25, .09, .01, 0, 1], np.float32)
         image = np.broadcast_to(row[None, :, None], (4, 12, 3)).copy()
-        arithmetic, rms, harmonic = self.evaluate(image)
+        _, arithmetic, rms, harmonic = self.evaluate(image)
         np.testing.assert_array_equal(arithmetic[0], rms[0])
         np.testing.assert_array_equal(arithmetic[0], harmonic[0])
         self.assertTrue(np.all(harmonic[1] <= arithmetic[1] + 2e-6))
@@ -74,13 +81,14 @@ class TestSpotHorizontalVariants(unittest.TestCase):
         for maximum, minimum in [(.9, .4), (.5, .8)]:
             spot_sim.taichi_spot_analytical_fragment(source, output, maximum, minimum, 0., 0.)
             reference = output.to_numpy()
-            for implementation in [spot_sim.spot_sim_fast2_horizontal,
+            # The analytical reference uses a raised-cosine spot on both axes.
+            for implementation in [cosine_horizontal,
                                    spot_sim.spot_sim_fast3_horizontal,
                                    spot_sim.spot_sim_fast4_horizontal]:
                 with self.subTest(maximum=maximum, minimum=minimum, variant=implementation.__name__):
                     evaluate_horizontal(source, energy, widths, implementation, maximum, minimum)
                     spot_sim.taichi_spot_fast2_vertical_fragment(
-                        energy, widths, output, maximum, minimum, 0., 0.)
+                        energy, widths, output, maximum, minimum, 0., 0., cubic_vertical=False)
                     result = output.to_numpy()
                     self.assertTrue(np.isfinite(result).all())
                     np.testing.assert_allclose(result, reference, atol=1e-7, rtol=1e-4)

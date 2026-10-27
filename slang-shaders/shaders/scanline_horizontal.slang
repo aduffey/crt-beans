@@ -59,51 +59,23 @@ layout(location = 1) flat in float delta;
 layout(location = 0) out uvec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
-#define PI 3.141592653589793
-
-// TODO proper doc
-// Represents the convolution of the spot function over 1 texel. We can sum
-// several calls of this function to solve the scanline convolution in a
-// piecewise manner.
-//
-// The integral of:
-//
-//     MaxSpotSize * s *
-//       (1 / w) * (2 * clamp(|y| / w, 0, 1)^3 - 3 * clamp(|y| / w, 0, 1)^2 + 1) *
-//       (1 / w) * (1/2 + 1/2 * cos(pi * clamp((x - t) / w, -1, 1)))
-//
-// with respect to t over the interval [x0, x1], where:
-//
-//   * s is the sample value for this texel
-//   * w is the radius of the spot for this texel (equivalently, the
-//     full width at half maximum)
-//   * x0 and x1 are the horizontal bounds of the texel along the scanline
-//   * x is the current horizontal position along the scanline
-//   * y is the current vertical position relative to the center of the scanline
-//
-// All units are in scanline widths (the vertical distance from the center of
-// one scanline to the center of the next is 1).
-//
-// Note that a common factor of MaxSpotSize / (2 * pi) has been factored out of
-// this function and should be multiplied back in externally.
-vec3 spot_integral(vec3 sample_value, vec3 width, float x, float x0, float x1) {
-    vec3 u0 = clamp((x - x0) / width, -1.0, 1.0);
-    vec3 u1 = clamp((x - x1) / width, -1.0, 1.0);
-    return sample_value * (PI * u0 + sin(PI * u0) - PI * u1 - sin(PI * u1));
+// Antiderivative of k(u) = 1 - 3*u^2 + 2*|u|^3 on [-1, 1].
+// F(1) - F(-1) = 1, so the horizontal spot has unit total energy.
+vec3 cubic_primitive(vec3 u) {
+    return u * (1.0 + u * u * (0.5 * abs(u) - 1.0));
 }
 
-// sign() requires ~4 instructions because it needs to account for edge cases
-// (0.0 and -0.0, etc). This is 2 instructions.
-// vec3 fast_sign(vec3 val) {
-//     return vec3(val.r < 0.0 ? -1.0 : 1.0, val.g < 0.0 ? -1.0 : 1.0, val.b < 0.0 ? -1.0 : 1.0);
-// }
-
-// vec3 spot_integral2(vec3 sample_value, vec3 w_rcp, float x, float x0, float x1) {
-//     vec3 edge0 = clamp(w_rcp * (x - x0), -1.0, 1.0);
-//     vec3 edge1 = clamp(w_rcp * (x - x1), -1.0, 1.0);
-//     return sample_value * (((edge0 * edge0) * (fast_sign(edge0) * (edge0 * edge0) - edge0) + edge0) -
-//             ((edge1 * edge1) * (fast_sign(edge1) * (edge1 * edge1) - edge1) + edge1));
-// }
+// Convolve s/w * k((x - t)/w) with a constant texel over [x0, x1].
+// The spot is zero outside radius w, which is also its full width at half
+// maximum. All distances are in scanline heights. Clamping the endpoints
+// extends the primitive constantly outside the spot's support.
+// The vertical spot and MaxSpotSize factor are applied in the vertical pass.
+vec3 spot_integral(vec3 sample_value, vec3 width, float x, float x0, float x1) {
+    vec3 w_rcp = 1.0 / width;
+    vec3 u0 = clamp(w_rcp * (x - x0), -1.0, 1.0);
+    vec3 u1 = clamp(w_rcp * (x - x1), -1.0, 1.0);
+    return sample_value * (cubic_primitive(u0) - cubic_primitive(u1));
+}
 
 void main() {
     vec3 energy = vec3(0.0);
@@ -125,11 +97,6 @@ void main() {
     // We actually only need the reciprocal of the width in the scanline pass.
     // To avoid calculating it multiple times later on, we'll just do it here.
     vec3 width_rcp = 1.0 / width;
-
-    // We pulled a common factor of (1.0 / (2.0 * PI)) out of the integral.
-    // We didn't need to multiply it before dividing moment / energy because
-    // it would cancel out. We can do it now for energy.
-    energy = (1.0 / (2.0 * PI)) * energy;
 
     // Pack both energy and width_rcp into one texture. This avoids an extra
     // pass (since we don't have multiple render target support) and allows

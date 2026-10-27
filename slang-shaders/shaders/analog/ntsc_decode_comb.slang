@@ -161,6 +161,7 @@ void main() {
     vec2 chroma = middle_chroma;
 
     if (params.FilterType > 0.5) {
+        // If we're comb filtering
         float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
         vec2 upper_chroma = vec2(0.0);
         vec2 lower_chroma = vec2(0.0);
@@ -203,6 +204,8 @@ void main() {
                 diff_d = 999.0;
             }
 
+            // First the directional parameter. Evaluate if we should use the
+            // top comb, bottom comb, or 3 line comb and blend between them.
             float diff_min = min(diff_u, diff_d);
             float diff_sum = diff_u + diff_d + 1.0e-5;
             float k_dir = clamp(((diff_u - diff_d) / diff_sum) * 3.0, -1.0, 1.0);
@@ -214,6 +217,8 @@ void main() {
                 combed_dir = 0.5 * (middle_chroma + upper_chroma);
             }
 
+            // Now decide if we need to disable the comb filter (when there is
+            // a large difference on the top *and* the bottom).
             float w_comb = 1.0 - smoothstep(0.06, 0.24, diff_min);
 
             chroma = mix(middle_chroma, combed_dir, w_comb);

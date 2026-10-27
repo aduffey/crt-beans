@@ -613,7 +613,8 @@ def spot3_float16(sample: f16vec3, distance_x: f16vec3, distance_y: f16vec3,
 
 def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                         overscan_horizontal: float, overscan_vertical: float,
-                        interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                        interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0,
+                        cubic_horizontal: bool = True, cubic_vertical: bool = True):
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
     aspect_ratio = float(out_width) / float(out_height)
@@ -626,12 +627,12 @@ def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_siz
     taichi_spot_fast2_horizontal_fragment(field_in, energy_intermediate, width_intermediate,
                                           max_spot_size, min_spot_size,
                                           overscan_horizontal, overscan_vertical, aspect_ratio,
-                                          interlace_mode)
+                                          interlace_mode, cubic_horizontal)
     imwrite("intermediate.png", linear_to_srgb(energy_intermediate.to_numpy()))
     taichi_spot_fast2_vertical_fragment(energy_intermediate, width_intermediate, field_out,
                                         max_spot_size, min_spot_size,
                                         overscan_horizontal, overscan_vertical,
-                                        interlace_mode, odd_field_first, frame_count)
+                                        interlace_mode, odd_field_first, frame_count, cubic_vertical)
     return field_out.to_numpy()
 
 
@@ -639,7 +640,8 @@ def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_siz
 def _kernel_spot_fast2_horizontal_fragment(field_in: ti.template(), energy_out: ti.template(), width_out: ti.template(),
                                            max_spot_size: float, min_spot_size: float,
                                            overscan_horizontal: float, overscan_vertical: float,
-                                           aspect_ratio: float, interlace_mode: int):
+                                           aspect_ratio: float, interlace_mode: int,
+                                           cubic_horizontal: ti.template()):
     (in_height, in_width) = field_in.shape
     (out_height, out_width) = energy_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
@@ -654,25 +656,27 @@ def _kernel_spot_fast2_horizontal_fragment(field_in: ti.template(), energy_out: 
     for y, x in energy_out:
         vTexCoord = tm.vec2((1.0 - overscan_horizontal) * ((x + 0.5) / out_width - 0.5) + 0.5, (y + 0.5) / out_height)
         energy_out[y, x], width_out[y, x] = spot_sim_fast2_horizontal(vTexCoord, field_in, SourceSize, OutputSize, delta,
-                                                                      max_spot_size, min_spot_size)
+                                                                      max_spot_size, min_spot_size, cubic_horizontal)
     return
 
 
 def taichi_spot_fast2_horizontal_fragment(field_in, energy_out, width_out,
                                           max_spot_size: float, min_spot_size: float,
                                           overscan_horizontal: float, overscan_vertical: float,
-                                          aspect_ratio: float, interlace_mode: int = 0):
+                                          aspect_ratio: float, interlace_mode: int = 0,
+                                          cubic_horizontal: bool = True):
     _kernel_spot_fast2_horizontal_fragment(field_in, energy_out, width_out,
                                            max_spot_size, min_spot_size,
                                            overscan_horizontal, overscan_vertical,
-                                           aspect_ratio, interlace_mode)
+                                           aspect_ratio, interlace_mode, cubic_horizontal)
 
 
 @ti.kernel
 def _kernel_spot_fast2_vertical_fragment(energy_in: ti.template(), width_in: ti.template(), field_out: ti.template(),
                                          max_spot_size: float, min_spot_size: float,
                                          overscan_horizontal: float, overscan_vertical: float,
-                                         interlace_mode: int, odd_field_first: int, frame_count: int):
+                                         interlace_mode: int, odd_field_first: int, frame_count: int,
+                                         cubic_vertical: ti.template()):
     (in_height, in_width) = energy_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
@@ -683,24 +687,26 @@ def _kernel_spot_fast2_vertical_fragment(energy_in: ti.template(), width_in: ti.
         field_out[y, x] = spot_sim_fast2_vertical(vTexCoord, energy_in, width_in, SourceSize, OutputSize,
                                                   max_spot_size, min_spot_size,
                                                   overscan_horizontal, overscan_vertical,
-                                                  interlace_mode, odd_field_first, frame_count)
+                                                  interlace_mode, odd_field_first, frame_count, cubic_vertical)
     return
 
 
 def taichi_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
                                         max_spot_size: float, min_spot_size: float,
                                         overscan_horizontal: float, overscan_vertical: float,
-                                        interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                                        interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0,
+                                        cubic_vertical: bool = True):
     _kernel_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
                                          max_spot_size, min_spot_size,
                                          overscan_horizontal, overscan_vertical,
-                                         interlace_mode, odd_field_first, frame_count)
+                                         interlace_mode, odd_field_first, frame_count, cubic_vertical)
 
 
 
 @ti.func
 def spot_sim_fast2_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
-                              max_spot_size: float, min_spot_size: float) -> tm.vec3:
+                              max_spot_size: float, min_spot_size: float,
+                              cubic_horizontal: ti.template() = True) -> tm.vec3:
     sample_y = int(vTexCoord.y * SourceSize.y)
     energy = tm.vec3(0.0)
     moment = tm.vec3(0.0)
@@ -711,7 +717,11 @@ def spot_sim_fast2_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, Outp
         x0 = delta * sample_x
         x1 = x0 + delta
         piece_width = tm.mix(max_spot_size * min_spot_size, max_spot_size, tm.sqrt(sample))
-        piece_energy = spot_fast2_horizontal(sample, piece_width, x, x0, x1)
+        piece_energy = tm.vec3(0.0)
+        if ti.static(cubic_horizontal):
+            piece_energy = spot_fast2_horizontal_cubic(sample, piece_width, x, x0, x1)
+        else:
+            piece_energy = spot_fast2_horizontal(sample, piece_width, x, x0, x1)
         energy += piece_energy
         moment += piece_width * piece_energy
     width = min(ti.select(energy > 0.0, moment / energy, min_spot_size * max_spot_size), max_spot_size)
@@ -760,7 +770,8 @@ def spot_sim_fast4_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, Outp
 
 @ti.func
 def evaluate_spot_fast2(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4, lines: tm.vec4,
-                        max_spot_size: float, min_spot_size: float) -> tm.vec3:
+                        max_spot_size: float, min_spot_size: float,
+                        cubic_vertical: ti.template() = True) -> tm.vec3:
     upper_sample_y = int(lines.x)
     lower_sample_y = int(lines.y)
     upper_distance_y = lines.z
@@ -776,52 +787,83 @@ def evaluate_spot_fast2(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4, li
     upper_width = max(upper_width, min_width)
     lower_width = max(lower_width, min_width)
 
-    return spot_fast2_vertical(upper_sample, upper_width, upper_distance_y, max_spot_size) + \
-           spot_fast2_vertical(lower_sample, lower_width, lower_distance_y, max_spot_size)
+    output = tm.vec3(0.0)
+    if ti.static(cubic_vertical):
+        output = spot_fast2_vertical_cubic(upper_sample, upper_width, upper_distance_y, max_spot_size) + \
+                 spot_fast2_vertical_cubic(lower_sample, lower_width, lower_distance_y, max_spot_size)
+    else:
+        output = spot_fast2_vertical(upper_sample, upper_width, upper_distance_y, max_spot_size) + \
+                 spot_fast2_vertical(lower_sample, lower_width, lower_distance_y, max_spot_size)
+    return output
 
 
 @ti.func
 def spot_sim_fast2_vertical(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4, OutputSize: tm.vec4,
                             max_spot_size: float, min_spot_size: float,
                             overscan_horizontal: float, overscan_vertical: float,
-                            interlace_mode: int, odd_field_first: int, frame_count: int) -> tm.vec3:
+                            interlace_mode: int, odd_field_first: int, frame_count: int,
+                            cubic_vertical: ti.template() = True) -> tm.vec3:
     # Overscan (horizontal overscan is handled in the horizontal pass)
     vTexCoord = tm.vec2(vTexCoord.x, (1.0 - overscan_vertical) * (vTexCoord.y - 0.5) + 0.5)
 
     output = tm.vec3(0.0)
     if interlace_mode == 2 and SourceSize.y < 350.0:
         lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
-        output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size)
+        output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
     elif interlace_mode >= 2 or SourceSize.y <= 300.0:
         lines = get_lines_closest(vTexCoord.y, SourceSize.y)
-        output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size)
+        output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
     elif interlace_mode == 1:
         lines_odd = get_lines_odd(vTexCoord.y, SourceSize.y)
         lines_even = get_lines_even(vTexCoord.y, SourceSize.y)
-        output = 0.5 * (evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_odd, max_spot_size, min_spot_size) +
-                        evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_even, max_spot_size, min_spot_size))
+        output = 0.5 * (evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_odd, max_spot_size, min_spot_size, cubic_vertical) +
+                        evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_even, max_spot_size, min_spot_size, cubic_vertical))
     else:
         phase = 1 if odd_field_first == 0 else 0
         if (frame_count + phase) % 2 == 0:
             lines = get_lines_odd(vTexCoord.y, SourceSize.y)
-            output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size)
+            output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
         else:
             lines = get_lines_even(vTexCoord.y, SourceSize.y)
-            output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size)
+            output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
     return output
 
 
 @ti.func
 def spot_fast2_horizontal(sample: tm.vec3, width: float, x: float, x0_: float, x1_: float):
+    # Original normalized raised-cosine integral, retained for comparisons.
     x0 = tm.clamp((x - x0_) / width, -1.0, 1.0)
     x1 = tm.clamp((x - x1_) / width, -1.0, 1.0)
     return 1 / (2.0 * np.pi) * sample * (np.pi * x0 + tm.sin(np.pi * x0) - np.pi * x1 - tm.sin(np.pi * x1))
 
 
 @ti.func
+def cubic_primitive(u: tm.vec3):
+    # Integral of 1 - 3*u^2 + 2*|u|^3; full support has unit energy.
+    return u * (1.0 + u * u * (0.5 * abs(u) - 1.0))
+
+
+@ti.func
+def spot_fast2_horizontal_cubic(sample: tm.vec3, width: tm.vec3, x: float, x0_: float, x1_: float):
+    w_rcp = 1.0 / width
+    u0 = tm.clamp(w_rcp * (x - x0_), -1.0, 1.0)
+    u1 = tm.clamp(w_rcp * (x - x1_), -1.0, 1.0)
+    return sample * (cubic_primitive(u0) - cubic_primitive(u1))
+
+
+@ti.func
 def spot_fast2_vertical(sample: tm.vec3, width: float, y_: float, max_spot_size: float):
+    # Original raised-cosine vertical profile for fast-cosine.
     y = tm.clamp(abs(y_) / width, 0.0, 1.0)
     return sample * max_spot_size / width * (0.5 * tm.cos(np.pi * y) + 0.5)
+
+
+@ti.func
+def spot_fast2_vertical_cubic(sample: tm.vec3, width: tm.vec3, y_: float, max_spot_size: float):
+    # Match the point-sampled cubic profile in scanline_vertical.inc.
+    width_rcp = 1.0 / width
+    y = tm.clamp(abs(y_) * width_rcp, 0.0, 1.0)
+    return sample * max_spot_size * width_rcp * (y * y * (2.0 * y - 3.0) + 1.0)
 
 
 def simulate_spot(image_in, output_dim, method: str,
@@ -838,12 +880,14 @@ def simulate_spot(image_in, output_dim, method: str,
     elif method == 'analytical':
         return spot_analytical_fragment(image_in, output_dim, max_spot_size, min_spot_size, overscan_horizontal, overscan_vertical,
                                         interlace_mode, odd_phase, frame_count)
-    elif method in ('fast', 'fast2'):
+    elif method in ('fast', 'fast2', 'fast-cosine'):
         return spot_fast2_fragment(image_in, output_dim, max_spot_size, min_spot_size, overscan_horizontal, overscan_vertical,
-                                   interlace_mode, odd_phase, frame_count)
+                                   interlace_mode, odd_phase, frame_count,
+                                   cubic_horizontal=method != 'fast-cosine',
+                                   cubic_vertical=method != 'fast-cosine')
     elif method == 'fast1':
         return spot_fast_fragment(image_in, output_dim, max_spot_size, min_spot_size, overscan_horizontal, overscan_vertical,
                                   interlace_mode, odd_phase, frame_count)
     else:
-        raise ValueError(f"Unknown scanline simulation method: {method}. Supported methods: 'sampled', 'analytical', 'fast'.")
+        raise ValueError(f"Unknown scanline simulation method: {method}. Supported methods: 'sampled', 'analytical', 'fast', 'fast-cosine'.")
 
