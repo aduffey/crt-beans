@@ -173,32 +173,46 @@ def chroma_carrier(t: float, line: int, frame_count: int,
 
 
 @ti.func
-def lanczos3(x: float) -> float:
-    val = 1.0
-    if x != 0.0:
-        px = np.pi * x
-        val = (tm.sin(px) * tm.sin(px / 3.0)) / (px * px)
-    return val
+def carrier_exact_4tap(u: float, wc: float) -> tm.vec4:
+    c1 = tm.cos(0.5 * wc)
+    c3 = tm.cos(1.5 * wc)
+    cu = tm.cos(u * wc)
+    s1 = tm.sin(0.5 * wc)
+    s3 = tm.sin(1.5 * wc)
+    su = tm.sin(u * wc)
+
+    e3 = 0.5 * (cu - c1) / (c3 - c1)
+    e1 = 0.5 - e3
+    o3 = (0.5 * su - u * s1) / (s3 - 3.0 * s1)
+    o1 = u - 3.0 * o3
+
+    return tm.vec4(e3 - o3, e1 - o1, e1 + o1, e3 + o3)
 
 
 @ti.func
-def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int) -> tm.vec2:
+def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int, wc: float) -> tm.vec2:
     result = tm.vec2(0.0, 0.0)
     if 0 <= target_y < height:
         texel_coord = coord_x * samples
         texel_floor = tm.floor(texel_coord - 0.5)
-        f = (texel_floor + 0.5) - texel_coord
+        d = (texel_coord - 0.5) - texel_floor
+        u = d - 0.5
+        w = carrier_exact_4tap(u, wc)
         base_x = int(texel_floor)
-        weight_sum = 0.0
-        for k in ti.static([-2, -1, 0, 1, 2, 3]):
-            w = lanczos3(f + k)
-            weight_sum += w
+        for k in ti.static([-1, 0, 1, 2]):
+            weight = 0.0
+            if k == -1:
+                weight = w.x
+            elif k == 0:
+                weight = w.y
+            elif k == 1:
+                weight = w.z
+            else:
+                weight = w.w
             sx = base_x + k
             if 0 <= sx < samples:
                 s = Source[target_y, sx]
-                result += w * tm.vec2(s.y, s.z)
-        if weight_sum != 0.0:
-            result = result / weight_sum
+                result += weight * tm.vec2(s.y, s.z)
     return result
 
 
@@ -363,6 +377,7 @@ def taichi_ntsc_decode_comb(
 ):
     (height, samples) = field_in.shape
     line_step = 2 if interlaced != 0 else 1
+    wc = 2.0 * np.pi * (periods_per_active_line / samples)
     for y, x in field_out:
         u = (x + 0.5) / samples
         middle = field_in[y, x]
@@ -383,8 +398,8 @@ def taichi_ntsc_decode_comb(
                     s = field_in[y + line_step, x]
                     lower_chroma = tm.vec2(s.y, s.z)
             else:
-                upper_chroma = interpolate_chroma(u - offset, y - line_step, field_in, samples, height)
-                lower_chroma = interpolate_chroma(u + offset, y + line_step, field_in, samples, height)
+                upper_chroma = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
+                lower_chroma = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
 
             if filter_type < 1.5:
                 # 3-line comb with boundary handling
@@ -527,8 +542,8 @@ def simulate_ntsc(
         is_interlaced_flag, odd_field_first_flag,
     )
 
-    # Pass 3: Chroma low-pass filter (1.3 MHz Hann window)
-    chroma_filter_width = samples / (1.3e6 * active_line_seconds * 2.0)
+    # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
+    chroma_filter_width = 1.5 * samples / ci.periods_per_active_line
     f_demod_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 

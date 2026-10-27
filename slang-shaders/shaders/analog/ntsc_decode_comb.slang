@@ -19,134 +19,63 @@ layout(push_constant) uniform Push {
 #pragma format R16G16B16A16_SFLOAT
 
 #include "parameters_ntsc.inc"
+#include "chroma_carrier.inc"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
 layout(location = 1) in vec2 TexCoord;
 layout(location = 0) out vec2 vTexCoord;
+layout(location = 1) flat out vec4 vWeightsUpper;
+layout(location = 2) flat out vec4 vWeightsLower;
+
+vec4 carrier_exact_4tap(float offset_x, float source_w, float wc) {
+    float delta_texels = offset_x * source_w;
+    float d = delta_texels - floor(delta_texels);
+    float u = d - 0.5;
+    float c1 = cos(0.5 * wc), c3 = cos(1.5 * wc), cu = cos(u * wc);
+    float s1 = sin(0.5 * wc), s3 = sin(1.5 * wc), su = sin(u * wc);
+
+    float e3 = 0.5 * (cu - c1) / (c3 - c1);
+    float e1 = 0.5 - e3;
+    float o3 = (0.5 * su - u * s1) / (s3 - 3.0 * s1);
+    float o1 = u - 3.0 * o3;
+
+    return vec4(e3 - o3, e1 - o1, e1 + o1, e3 + o3);
+}
 
 void main() {
     gl_Position = MVP * Position;
     vTexCoord = TexCoord;
+
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
+    float wc = 2.0 * PI * (ci.periods_per_active_line * params.SourceSize.z);
+
+    if (params.FilterType > 0.5 && offset != 0.0) {
+        vWeightsUpper = carrier_exact_4tap(-offset, params.SourceSize.x, wc);
+        vWeightsLower = carrier_exact_4tap( offset, params.SourceSize.x, wc);
+    } else {
+        vWeightsUpper = vec4(0.0);
+        vWeightsLower = vec4(0.0);
+    }
 }
 
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
+layout(location = 1) flat in vec4 vWeightsUpper;
+layout(location = 2) flat in vec4 vWeightsLower;
 layout(location = 0) out vec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
 #include "../colorspace/conversions.inc"
-#include "chroma_carrier.inc"
 
-float lanczos3(float x) {
-    // We don't need to check the outer bounds, just don't call with x > 3
-    if (x == 0.0) {
-        return 1.0;
-    }
-    x = PI * x;
-    return (sin(x) * sin(x / 3.0)) / (x * x);
+vec2 interpolate4(vec2 center_coord, vec4 w) {
+    vec2 result = w.x * textureLodOffset(Source, center_coord, 0.0, ivec2(-1, 0)).gb;
+    result += w.y * textureLodOffset(Source, center_coord, 0.0, ivec2( 0, 0)).gb;
+    result += w.z * textureLodOffset(Source, center_coord, 0.0, ivec2( 1, 0)).gb;
+    result += w.w * textureLodOffset(Source, center_coord, 0.0, ivec2( 2, 0)).gb;
+    return result;
 }
-
-vec2 interpolate(vec2 coord, sampler2D Source, vec4 SourceSize) {
-    // When we look backwards or forwards 227.5 chroma subcarrier periods for
-    // our comb filter, we may end up between samples on the previous or next
-    // line. If we just use simple hardware bilinear sampling, we end up with
-    // aliasing that looks like the chroma subcarrier contaminating the luma.
-    // One option to fix this would be to use a higher sampling rate, but the
-    // more efficient option is to use a better interpolation method.
-    //
-    // We can use a Lanczos kernel with a = 3. We only need to interpolate on
-    // the horizontal axis.
-    float texel_coord = coord.x * SourceSize.x;
-	float texel_floor = floor(texel_coord - 0.5);
-	float f = (texel_floor + 0.5) - texel_coord;
-    float center = (texel_floor + 0.5) * SourceSize.z;
-
-    vec2 result = vec2(0.0);
-    float weightSum = 0.0;
-
-    float weight = lanczos3(f - 2.0);
-    result += weight * textureLodOffset(Source, vec2(center, coord.y), 0.0, ivec2(-2, 0)).gb;
-    weightSum += weight;
-
-    weight = lanczos3(f - 1.0);
-    result += weight * textureLodOffset(Source, vec2(center, coord.y), 0.0, ivec2(-1, 0)).gb;
-    weightSum += weight;
-
-    weight = lanczos3(f);
-    result += weight * textureLodOffset(Source, vec2(center, coord.y), 0.0, ivec2(0, 0)).gb;
-    weightSum += weight;
-
-    weight = lanczos3(f + 1.0);
-    result += weight * textureLodOffset(Source, vec2(center, coord.y), 0.0, ivec2(1, 0)).gb;
-    weightSum += weight;
-
-    weight = lanczos3(f + 2.0);
-    result += weight * textureLodOffset(Source, vec2(center, coord.y), 0.0, ivec2(2, 0)).gb;
-    weightSum += weight;
-
-    weight = lanczos3(f + 3.0);
-    result += weight * textureLodOffset(Source, vec2(center, coord.y), 0.0, ivec2(3, 0)).gb;
-    weightSum += weight;
-
-    return result / weightSum;
-}
-
-/*
-void main() {
-    ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
-    vec3 middle = texelFetch(Source, texel_loc, 0).rgb;
-    float composite = middle.r;
-    vec2 middle_chroma = middle.gb;
-    vec2 chroma = vec2(0.0);
-
-    if (params.FilterType < 0.5) {
-        // Notch filter
-        // Just pass the demodulated, low-passed chroma through.
-        chroma = middle_chroma;
-    } else if (params.FilterType < 1.5) {
-        // 3 line comb filter
-        // First we need to find the positions on the previous and next lines
-        // that are 227.5 chroma periods before and after the current position.
-        // In standard NTSC, these would be directly above and below the
-        // current position, but many consoles had non-standard line lengths.
-        // We'll use the values here for our comb filter.
-        float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
-        vec2 upper_chroma = interpolate(vTexCoord + vec2(offset, params.SourceSize.w), Source, params.SourceSize);
-        vec2 lower_chroma = interpolate(vTexCoord - vec2(offset, params.SourceSize.w), Source, params.SourceSize);
-        chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma;
-    } else {
-        // Adaptive comb filter
-        float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
-        vec2 upper_chroma = interpolate(vTexCoord + vec2(offset, params.SourceSize.w), Source, params.SourceSize);
-        vec2 lower_chroma = interpolate(vTexCoord - vec2(offset, params.SourceSize.w), Source, params.SourceSize);
-
-        float upper_difference = distance(middle_chroma, upper_chroma);
-        float lower_difference = distance(middle_chroma, lower_chroma);
-
-        // First the directional parameter. Evaluate if we should use the top
-        // comb, bottom comb, or 3 line comb and blend between them.
-        float k_dir = (upper_difference - lower_difference) / (upper_difference + lower_difference + 1.0e-5); // TODO revisit epsilon
-        // k_dir = sign(k_dir) * smoothstep(0.05, 0.8, abs(k_dir));  // TODO revisit constants 0.2 and 1.0
-        k_dir = 2.0 * smoothstep(-0.8, 0.8, k_dir) - 1.0;
-        // When k_dir == 0, this simplifies to the 3 line comb.
-        vec2 combed_chroma = ((1.0 - k_dir) * (middle_chroma + upper_chroma) + (1.0 + k_dir) * (middle_chroma + lower_chroma)) / 4.0;
-
-        // Now decide if we need to disable the comb filter (when there is a
-        // large difference on the top *and* the bottom).
-        float k_comb = 1.0 - smoothstep(0.04, 0.18, min(upper_difference, lower_difference)); // TODO revisit constants
-        chroma = mix(middle_chroma, combed_chroma, k_comb);
-    }
-
-    // We'll remodulate the chroma and subtract it from the composite signal to
-    // get the luma.
-    float carrier = chroma_carrier(vTexCoord.x, texel_loc.y, params.FrameCount, ci);
-    float luma = composite - chroma.r * sin(carrier) - chroma.g * cos(carrier);
-
-    FragColor.rgb = yuv_to_linear(vec3(luma, chroma.r, chroma.g));
-}
-*/
 
 void main() {
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
@@ -174,8 +103,10 @@ void main() {
                 lower_chroma = texelFetch(Source, texel_loc + ivec2(0, line_step), 0).gb;
             }
         } else {
-            upper_chroma = interpolate(vTexCoord + vec2(-offset, -uv_step_y), Source, params.SourceSize);
-            lower_chroma = interpolate(vTexCoord + vec2( offset,  uv_step_y), Source, params.SourceSize);
+            float shift_u = floor(-offset * params.SourceSize.x) * params.SourceSize.z;
+            float shift_l = floor( offset * params.SourceSize.x) * params.SourceSize.z;
+            upper_chroma = interpolate4(vec2(vTexCoord.x + shift_u, vTexCoord.y - uv_step_y), vWeightsUpper);
+            lower_chroma = interpolate4(vec2(vTexCoord.x + shift_l, vTexCoord.y + uv_step_y), vWeightsLower);
         }
 
         if (params.FilterType < 1.5) {

@@ -115,7 +115,7 @@ All bandwidth values are in MHz.
 
 Video bandwidth applies the same filtering to all three RGB channels. Chroma bandwidth applies the same filtering to both color channels.
 
-In the NTSC preset, these parameters control filtering before the signals are combined into composite video. The decoder also applies a fixed chroma low-pass filter of approximately 1.3 MHz, so increasing chroma bandwidth does not remove all color blurring.
+In the NTSC preset, these parameters control filtering before the signals are combined into composite video. The decoder also applies a fixed carrier-locked chroma low-pass filter of approximately 1.2 MHz (subcarrier / 3), so increasing chroma bandwidth does not remove all color blurring.
 
 ### Composite Y/C filter
 

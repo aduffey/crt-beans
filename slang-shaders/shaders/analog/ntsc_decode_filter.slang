@@ -43,14 +43,11 @@ void main() {
     chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
 
-    // Low-pass filter the chroma. We'll just use a Hann function as our kernel
-    // instead of a windowed sinc. This is faster, results in no ringing, and
-    // still has a reasonable roll-off. We're simulating old analog filters in
-    // cheap electronics, anyway.
-
-    // First find the filter width for 1.3MHz
-    float active_line_seconds = ci.periods_per_active_line / CHROMA_SUBCARRIER;
-    float width = params.SourceSize.x / (1.3e6 * active_line_seconds * 2.0);
+    // Low-pass filter the chroma. We use a carrier-locked Hann window as our
+    // kernel instead of a windowed sinc. Setting the half-width to 1.5 subcarrier
+    // periods places exact spectral nulls at fc (3.58 MHz) and 2*fc (7.16 MHz),
+    // eliminating demodulated subcarrier ripple with no ringing and low cost.
+    float width = 1.5 * params.SourceSize.x / ci.periods_per_active_line;
 
     vec2 chroma = vec2(0.0);
     float width_rcp = 1.0 / width;

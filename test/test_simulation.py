@@ -287,6 +287,59 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertEqual(out.shape, (3, 32, 3))
         self.assertTrue(np.all(np.isfinite(out)))
 
+    def test_ntsc_carrier_exact_interpolator_invariants(self):
+        # Verify algebraic invariants of the 4-tap carrier-exact comb interpolator
+        import taichi as ti
+        import taichi.math as tm
+
+        @ti.kernel
+        def eval_kernel(u: float, wc: float) -> tm.vec4:
+            return filtering.carrier_exact_4tap(u, wc)
+
+        # Nodes relative to midpoint u in [-0.5, 0.5]
+        nodes = np.array([-1.5, -0.5, 0.5, 1.5], dtype=np.float64)
+        for wc in [1.1914, 1.2709, 1.3069]:
+            for u in np.linspace(-0.5, 0.5, 11):
+                w_vec = eval_kernel(float(u), float(wc))
+                w = np.array([w_vec.x, w_vec.y, w_vec.z, w_vec.w], dtype=np.float64)
+
+                # 1. Partition of unity (exact DC preservation: sum w_k == 1)
+                self.assertAlmostEqual(float(np.sum(w)), 1.0, places=6)
+
+                # 2. Linear moment preservation (sum x_k w_k == u)
+                self.assertAlmostEqual(float(np.sum(nodes * w)), float(u), places=6)
+
+                # 3. Exact response at carrier frequency wc
+                expected = np.exp(1j * u * wc)
+                actual = np.sum(w * np.exp(1j * nodes * wc))
+                self.assertAlmostEqual(float(np.real(actual)), float(np.real(expected)), places=6)
+                self.assertAlmostEqual(float(np.imag(actual)), float(np.imag(expected)), places=6)
+
+            # 4. Kronecker delta at exact grid points
+            w_left = np.array(eval_kernel(-0.5, float(wc)), dtype=np.float64)
+            np.testing.assert_allclose(w_left, [0.0, 1.0, 0.0, 0.0], atol=1e-6)
+
+            w_right = np.array(eval_kernel(0.5, float(wc)), dtype=np.float64)
+            np.testing.assert_allclose(w_right, [0.0, 0.0, 1.0, 0.0], atol=1e-6)
+
+    def test_ntsc_chroma_lpf_carrier_nulls(self):
+        # Carrier-locked Hann window of half-width W = 1.5 * samples / periods_per_active_line
+        # places spectral nulls near fc (k=3) and 2*fc (k=6).
+        for periods in [170.667, 182.044, 187.2]:
+            samples = 900.0
+            W = 1.5 * samples / periods
+            i_bound = int(np.floor(W))
+            n = np.arange(-i_bound, i_bound + 1)
+            hann = 0.5 + 0.5 * np.cos(np.pi * n / W)
+            hann /= np.sum(hann)
+
+            f_c = periods / samples
+            h_fc = np.abs(np.sum(hann * np.exp(-2j * np.pi * f_c * n)))
+            h_2fc = np.abs(np.sum(hann * np.exp(-2j * np.pi * 2.0 * f_c * n)))
+
+            self.assertLess(h_fc, 0.0003)
+            self.assertLess(h_2fc, 0.0007)
+
     def test_ntsc_interlaced_carrier_phase_patterns(self):
         # Verify 4-field carrier phase patterns at the horizontal start of the first
         # visible line of the active field (line 0 for odd field, line 1 for even field).
