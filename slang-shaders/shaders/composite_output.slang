@@ -11,7 +11,6 @@ layout(push_constant) uniform Push {
     vec4 SourceSize;
     vec4 ScanlinesSize;
     uint FrameCount;
-    float GlowSigma;
     float GlowAmount;
 } params;
 

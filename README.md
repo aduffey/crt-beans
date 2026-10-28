@@ -26,7 +26,8 @@ Currently, supported features include:
 
 `benchmark_shader.py` benchmarks one preset and a shader-disabled baseline using
 Flatpak RetroArch's built-in image viewer. It starts a private headless Weston
-display and renders at **2880×2160**, preserving the image's native input size.
+display and renders at **2880×2160** by default, preserving the image's native input size.
+Use `--output-resolution WIDTH HEIGHT` to select another output size.
 Install `weston` (on Fedora: `sudo dnf install weston`) and the RetroArch Flatpak,
 and run from a user session with `XDG_RUNTIME_DIR` and access to a hardware Vulkan
 GPU. No monitor or visible RetroArch window is required.

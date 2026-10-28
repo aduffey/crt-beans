@@ -317,7 +317,11 @@ def parse_args(argv=None):
     parser.add_argument('--repeats', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=300, help='Seconds allowed per run')
     parser.add_argument('--gpu-index', type=int, default=0, help='RetroArch Vulkan GPU index')
+    parser.add_argument('--output-resolution', type=int, nargs=2, default=[2880, 2160],
+                        metavar=('WIDTH', 'HEIGHT'), help='Output size (default: 2880 2160)')
     args = parser.parse_args(argv)
+    if any(size <= 0 for size in args.output_resolution):
+        parser.error('output dimensions must be positive')
     if not 0 < args.short_frames < args.long_frames:
         parser.error('require 0 < --short-frames < --long-frames')
     if args.warmup_frames < 1 or args.repeats < 1 or args.gpu_index < 0:
@@ -335,7 +339,9 @@ def parse_args(argv=None):
 
 
 def main(argv=None):
+    global WIDTH, HEIGHT
     args = parse_args(argv)
+    WIDTH, HEIGHT = args.output_resolution
     output = None
     try:
         for executable in ('flatpak', 'weston'):

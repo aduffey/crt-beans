@@ -9,7 +9,6 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 layout(push_constant) uniform Push {
     vec4 SourceSize;
     vec4 OriginalSize;
-    float FilterType;
     float System;
     uint FrameCount;
 } params;

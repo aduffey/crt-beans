@@ -21,6 +21,22 @@ VALID_LOG = '''[INFO] [Vulkan] Found vulkan context: "vk_wayland".
 
 
 class TestBenchmarkValidation(unittest.TestCase):
+    def test_selected_output_resolution_is_used_for_config_and_validation(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(bench, 'WIDTH', 1440), patch.object(bench, 'HEIGHT', 1080):
+            root = Path(directory)
+            config = root / 'retroarch.cfg'
+            bench.write_config(config, root, 1)
+            self.assertIn('video_fullscreen_x = "1440"', config.read_text())
+            self.assertIn('video_fullscreen_y = "1080"', config.read_text())
+            bench.validate_log(VALID_LOG.replace('2880x2160', '1440x1080'), True)
+            with self.assertRaises(bench.BenchmarkError):
+                bench.validate_log(VALID_LOG, True)
+            screenshot = root / 'shot.png'
+            screenshot.write_bytes(b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13)
+                                  + b'IHDR' + struct.pack('>II', 1440, 1080))
+            bench.validate_screenshot(screenshot)
+
     def test_rejects_invalid_rendering_even_after_a_successful_initialization(self):
         for log in [
                 VALID_LOG + '[ERROR] [Vulkan] Failed to create preset: "bad.slangp".\n',
