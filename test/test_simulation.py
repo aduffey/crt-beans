@@ -712,34 +712,49 @@ class TestMaskTypes(unittest.TestCase):
                     self.assertTrue(np.all((mask >= 0.0) & (mask <= 1.0)))
                     np.testing.assert_allclose(mask.sum(axis=-1), 3.0 * dc, atol=2e-6)
 
-    def test_monochrome_smoothness_and_brightness(self):
-        for smoothness in (0.0, 0.5, 0.99999, 1.0):
-            mask, coverage = masking.generate_monochrome_mask((2, 1440), smoothness)
-            np.testing.assert_array_equal(mask[:, :2], 1.0)
-            np.testing.assert_allclose(mask[:, 2::3], smoothness)
-            np.testing.assert_allclose(mask.mean(axis=(0, 1)), 1 / coverage, atol=3e-5)
-            image = np.full_like(mask, [0.1, 0.3, 0.8])
-            for mitigation in (0.0, 0.5, 1.0):
-                out = masking.apply_mask(image, 'monochrome', mask_smoothness=smoothness,
-                                         mask_mitigation=mitigation)
-                self.assertTrue(np.all(np.isfinite(out)))
-                if smoothness == 1.0:
-                    np.testing.assert_array_equal(out, image)
-                elif mitigation == 0.0:
-                    np.testing.assert_allclose(out, image * mask, atol=1e-6)
-                elif mitigation == 1.0:
-                    np.testing.assert_allclose(out.mean(axis=1), image[:, 0], atol=3e-5)
+    def test_monochrome_sizes_and_brightness(self):
+        tiles = ([1, 0], [1, 1, 0], [1, 1, 0, 0], [1, 1, 1, 0, 0])
+        for pattern, tile in enumerate(tiles):
+            with self.subTest(pattern=pattern):
+                # Include a partial repeat and the intended 1440-pixel viewport.
+                for width in (1440, 1441):
+                    mask, coverage = masking.generate_monochrome_mask((2, width), pattern)
+                    self.assertEqual(mask.shape, (2, width, 3))
+                    self.assertEqual(mask.dtype, np.float32)
+                    expected = np.resize(tile, width)
+                    for channel in range(3):
+                        np.testing.assert_array_equal(mask[0, :, channel], expected)
+                    np.testing.assert_array_equal(mask[0], mask[1])
+                    self.assertAlmostEqual(coverage, len(tile) / sum(tile))
 
-    def test_dynamic_dispatch_and_unaffected_subpixel(self):
+                mask, coverage = masking.generate_monochrome_mask((2, 1440), pattern)
+                np.testing.assert_allclose(mask.mean(axis=(0, 1)), 1 / coverage, atol=3e-5)
+                image = np.full_like(mask, [0.1, 0.3, 0.8])
+                for mitigation in (0.0, 0.5, 1.0):
+                    out = masking.apply_mask(image, 'monochrome', pattern,
+                                             mask_mitigation=mitigation)
+                    self.assertEqual(out.shape, image.shape)
+                    self.assertTrue(np.all(np.isfinite(out)))
+                    self.assertTrue(np.all((out >= -1e-6) & (out <= 1.0 + 1e-6)))
+                    if mitigation == 0.0:
+                        np.testing.assert_allclose(out, image * mask, atol=1e-6)
+                    elif mitigation == 1.0:
+                        np.testing.assert_allclose(out.mean(axis=1), image[:, 0], atol=3e-5)
+
+    def test_dynamic_dispatch_and_unaffected_static_masks(self):
         image = self.img[:, :144]
         for mode in ('dynamic', 'bandlimit', 'dynamic2', 'monochrome'):
             for smoothness in (0.0, 0.5, 1.0):
                 out = masking.apply_mask(image, mode, mask_triads=24, mask_smoothness=smoothness)
                 self.assertEqual(out.shape, image.shape)
                 self.assertTrue(np.all(np.isfinite(out)))
-        np.testing.assert_array_equal(
-            masking.apply_mask(image, 'subpixel', mask_smoothness=0.0),
-            masking.apply_mask(image, 'subpixel', mask_smoothness=1.0))
+        for mode in ('subpixel', 'monochrome'):
+            for pattern in range(4):
+                baseline = masking.apply_mask(image, mode, pattern)
+                for smoothness in (0.5, 1.0):
+                    np.testing.assert_array_equal(
+                        masking.apply_mask(image, mode, pattern, mask_triads=24,
+                                           mask_smoothness=smoothness), baseline)
 
     def test_coverage_mask(self):
         out = masking.apply_mask(self.img, 'coverage', 1, 'slot', 550.0, 1.0)

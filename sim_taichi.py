@@ -158,7 +158,7 @@ def build_parser():
                         help='Type of phosphor mask to apply')
     parser.add_argument('--mask-pattern', dest='subpixel_mask_pattern', type=int, choices=[0, 1, 2, 3],
                         default=DEFAULT_CONFIG.subpixel_mask_pattern,
-                        help='Subpixel mask pattern index (0=1080p, 1=1440p, 2=4k, 3=4k low TVL)')
+                        help='Static mask size for subpixel and monochrome (0=2 pixels, 1=3 pixels, 2=4 pixels, 3=5 pixels)')
     parser.add_argument('--tiled-mask-type', choices=['slot', 'aperture'],
                         default=DEFAULT_CONFIG.tiled_mask_type,
                         help='Tiled mask texture type')
@@ -167,7 +167,7 @@ def build_parser():
     parser.add_argument('--mask-amount', type=float, default=DEFAULT_CONFIG.mask_amount,
                         help='Phosphor mask blend amount')
     parser.add_argument('--mask-smoothness', type=float, default=DEFAULT_CONFIG.mask_smoothness,
-                        help='Mask smoothness from 0 to 1 (dynamic, dynamic2, monochrome)')
+                        help='Mask smoothness from 0 to 1 (dynamic, dynamic2)')
 
     # Diffusion options
     parser.add_argument('--diffusion', action=argparse.BooleanOptionalAction,

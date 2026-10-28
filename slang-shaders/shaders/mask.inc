@@ -215,11 +215,14 @@ vec4 dynamic2_aperture_grille(vec2 coord, vec4 output_size, float mask_triads, f
     return vec4(mask, 1.0 / dc);
 }
 
-// Two white output pixels followed by one dark pixel, independent of subpixels.
-vec4 monochrome_mask(vec2 coord, vec4 output_size, float smoothness) {
-    float x = floor(coord.x * output_size.x);
-    float value = mod(x, 3.0) < 2.0 ? 1.0 : smoothness;
-    return vec4(vec3(value), 3.0 / (2.0 + smoothness));
+// Static 2-5 pixel repeats: WB, WWB, WWBB, WWWBB, independent of subpixels.
+// Split each repeat evenly, assigning an odd repeat's extra pixel to white.
+vec4 monochrome_mask(vec2 coord, vec4 output_size, float pixels_per_repeat) {
+    float white_pixels = floor((pixels_per_repeat + 1.0) / 2.0);
+    // Sample pixel centers so floating-point mod cannot misclassify wrap edges.
+    float x = floor(coord.x * output_size.x) + 0.5;
+    float value = mod(x, pixels_per_repeat) < white_pixels ? 1.0 : 0.0;
+    return vec4(vec3(value), pixels_per_repeat / white_pixels);
 }
 
 // Blend the mask with the current pixel value and return the result.
@@ -258,7 +261,7 @@ vec4 monochrome_mask(vec2 coord, vec4 output_size, float smoothness) {
 // Returns:
 //     A vec3 with the rgb value of this pixel after applying the mask.
 vec3 blend_mask(vec3 mask, vec3 pixel_value, float mask_coverage, float mitigation) {
-    // A fully white monochrome mask has coverage 1 and needs no blending.
+    // A fully white mask has coverage 1 and needs no blending.
     if (mask_coverage <= 1.0) {
         return pixel_value;
     }

@@ -195,11 +195,16 @@ def generate_dynamic2_mask(shape: tuple[int, ...], mask_triads: float, smoothnes
     return mask.astype(np.float32), float(1.0 / dc)
 
 
-def generate_monochrome_mask(shape: tuple[int, ...], smoothness: float = 0.0) -> tuple[np.ndarray, float]:
+def generate_monochrome_mask(shape: tuple[int, ...], mask_pattern: int = 1) -> tuple[np.ndarray, float]:
+    """Static monochrome grille: WB, WWB, WWBB, or WWWBB."""
+    if mask_pattern not in (0, 1, 2, 3):
+        raise AssertionError('Unhandled mask pattern')
     out_height, out_width = shape[:2]
-    row = np.where(np.arange(out_width) % 3 < 2, 1.0, smoothness)
+    period = mask_pattern + 2
+    white_pixels = (period + 1) // 2
+    row = (np.arange(out_width) % period < white_pixels)
     mask = np.broadcast_to(row[None, :, None], (out_height, out_width, 3))
-    return mask.astype(np.float32), 3.0 / (2.0 + smoothness)
+    return mask.astype(np.float32), period / white_pixels
 
 
 def generate_additive_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
@@ -390,7 +395,7 @@ def apply_mask(
     elif mask_type == 'dynamic2':
         mask, coverage = generate_dynamic2_mask(shape, mask_triads, mask_smoothness)
     elif mask_type == 'monochrome':
-        mask, coverage = generate_monochrome_mask(shape, mask_smoothness)
+        mask, coverage = generate_monochrome_mask(shape, mask_pattern)
     elif mask_type == 'coverage':
         mask, coverage = generate_coverage_mask(shape, mask_triads)
     elif mask_type == 'additive':
