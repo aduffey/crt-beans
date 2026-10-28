@@ -8,58 +8,64 @@ This is a work-in-progress CRT simulation, prototyped in [Taichi](https://www.ta
 
 The original goal for this project was to accurately simulate the scanline-based raster drawing of a CRT television. Scanlines are simulated in (what I believe is) a novel way, which results in consistent and accurate results regardless of the horizontal input resolution or the output resolution.
 
-There are many highly configurable shaders offering more features than this one. The features and configurable parameters will be kept limited for the sake of simplicity in use and development. The goal is to make pixel art look good, not to accurately simulate any arbitrary CRT television.
+There are many highly configurable shaders offering more features than this one. The features and configurable parameters will be kept limited for the sake of simplicity in use and development.
 
 ## Supported features
 
-Currently, supported features include:
-* A configurable low-pass filter to simulate the limited bandwidth of an analog connection.
-* Optional YIQ encoding to simulate a composite or s-video connection (actual NTSC encoding/decoding is not currently supported).
-* Configurable scanline simulation.
-* Configurable overscan cropping.
-* "Glow" simulation, recreating the glowing areas around bright parts of the screen caused by the scattering of light in the glass.
-* Interlacing support in the Slang shaders.
-* Support for aperture gille masks, either with predefined subpixel layouts or dynamically generated.
-* The Slang shaders have been tested to run in 4k at 60 FPS on a Ryzen 7000 integrated GPU in their default configuration. _Performance is a feature!_
+* RGB and S-Video bandwidth filtering.
+* NTSC composite encoding/decoding with notch, comb, and adaptive comb filters, plus console-specific timing models.
+* Configurable scanlines with brightness-dependent beam width.
+* Bob and weave interlacing, plus VGA line doubling.
+* Horizontal and vertical overscan cropping.
+* Dynamic and subpixel aperture grille masks.
+* Configurable glass diffusion ("glow") in full presets.
+* Fast variants of every preset, omitting glow for improved performance.
+
+See the [parameter documentation](slang-shaders/shaders/docs/parameters.md) for details.
+
+## Shader quick start
+
+1. Copy the contents of `slang-shaders/` into a `crt-beans/` folder inside RetroArch's shader directory.
+2. Load a game, then open **Quick Menu → Shaders**, enable **Video Shaders**, and choose **Load Shader Preset**. Start with `crt-beans.slangp` from the copied folder.
+3. Adjust **Shader Parameters**, then use **Shaders → Save** to save a preset for the game or core. See [RetroArch's shader guide](https://docs.libretro.com/guides/shaders/) for details.
+
+## Choosing a preset
+
+| Preset | Simulation |
+| --- | --- |
+| `crt-beans.slangp` | CRT rendering without analog signal filtering. |
+| `crt-beans-rgb.slangp` | RGB connection with configurable bandwidth. |
+| `crt-beans-s-video.slangp` | S-Video with separate luma and chroma filtering. |
+| `crt-beans-ntsc.slangp` | NTSC composite with color artifacts and selectable Y/C separation. |
+| `crt-beans-vga.slangp` | VGA line doubling below 350 lines, monitor-like beam widths, and no mask by default. |
+
+Each preset has a fast variant without glow: `crt-beans-fast.slangp`, `crt-beans-fast-rgb.slangp`, and so on.
+
+For best results:
+
+* Use the core's native output resolution, especially with NTSC; some timing models infer the video mode from the input width.
+* In the NTSC presets, set **NTSC system** to the console being emulated, or use Standard NTSC for generic timing.
+* Disable overscan cropping in Retroarch and in the core when using the shader's horizontal and vertical overscan controls.
+
+## Python reference model
+
+The Python/Taichi implementation is a reference model for experiments and still-image rendering. Install [uv](https://docs.astral.sh/uv/) and use Python 3.12 (pinned in `.python-version`). From the repository root:
+
+```sh
+uv sync
+uv run python sim_taichi.py input.png /tmp/output.png --output-resolution 1080 1440
+```
+
+Replace `input.png` with your source image. Resolution is **height, width**; this example produces a 1440×1080 image at 4:3. Use `--help` for the available options.
 
 ## Benchmarking shader presets
 
-`benchmark_shader.py` benchmarks one preset and a shader-disabled baseline using
-Flatpak RetroArch's built-in image viewer. It starts a private headless Weston
-display and renders at **2880×2160** by default, preserving the image's native input size.
-Use `--output-resolution WIDTH HEIGHT` to select another output size.
-Install `weston` (on Fedora: `sudo dnf install weston`) and the RetroArch Flatpak,
-and run from a user session with `XDG_RUNTIME_DIR` and access to a hardware Vulkan
-GPU. No monitor or visible RetroArch window is required.
+Benchmark a preset against a shader-disabled baseline using Flatpak RetroArch, Weston, and a hardware Vulkan GPU:
 
 ```sh
-uv run python benchmark_shader.py slang-shaders/crt-beans-ntsc.slangp test-images/snes-mmx.png
+uv run python benchmark_shader.py slang-shaders/crt-beans.slangp test_pattern.png
 ```
 
-The harness saves its configuration, verbose logs, validation screenshots and
-`results.json` in a new directory under `/tmp`. Use `--output-dir PATH` to retain
-them in a chosen new directory. The user's RetroArch configuration is not loaded.
-The preset is read in place, so referenced presets, includes and textures retain
-their original paths.
+Replace `test_pattern.png` with your test image.
 
-Each workload first runs 600 warm-up frames and takes an untimed GPU screenshot
-to check the output dimensions. It then measures five pairs of 1,000-frame and
-7,000-frame runs, alternating short/long order. Frame time is estimated as
-`1000 × (long_seconds − short_seconds) / 6000` milliseconds, reducing fixed
-startup/compilation overhead. Results include the raw runs, median frame time,
-FPS, range and median absolute deviation. This measures RetroArch throughput,
-including presentation, rather than individual shader pass GPU time.
-
-Software rendering, shader errors/fallback, unexpected output dimensions and
-FIFO presentation are rejected. A baseline at or below 65 FPS is also rejected
-as potentially capped. Logs use RetroArch 1.22.2's Vulkan messages; an unrecognized
-backend/log format fails validation rather than silently accepting a result.
-For the initial swapchain RetroArch reports supported modes instead of the
-selected mode; the harness records its mode inference with VSync disabled.
-Artifacts survive failures, timeouts and interruption, and the harness stops its
-own compositor and active rendering process. Timed runs do not take screenshots.
-Keep other GPU workloads idle when comparing results.
-
-`--short-frames`, `--long-frames`, `--warmup-frames`, `--repeats`, `--timeout` and
-`--gpu-index` control run length and device selection; see `--help`. Small frame
-counts are useful for a smoke test but produce noisy benchmark estimates.
+See the [benchmarking guide](docs/benchmarking.md) for setup, measurement details, and validation checks.
