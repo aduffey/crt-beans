@@ -47,21 +47,21 @@ void main() {
     // periods places exact spectral nulls at fc (3.58 MHz) and 2*fc (7.16 MHz),
     // eliminating demodulated subcarrier ripple with no ringing and low cost.
     float width = 1.5 * params.SourceSize.x / ci.periods_per_active_line;
-
-    vec2 chroma = vec2(0.0);
     float width_rcp = 1.0 / width;
-    float weight_sum = 0.0;
-    for (int i = -int(floor(width)); i <= int(floor(width)); i++) {
-        // Note that these indexes (and the hann function not needing a clamp)
-        // rely on the size of the input and ouput being the same.
-        // TODO take advantage of symmetry?
-        // TODO precompute coefficients in vertex shader?
-        float coeff = hann_function(i, width_rcp);
-        weight_sum += coeff;
-        // We use textureLod because texelFetch is undefined for out-of-texture
-        // accesses.
-        vec2 offset = vec2(i * params.SourceSize.z, 0.0);
-        chroma += coeff * textureLod(Source, vTexCoord + offset, 0.0).gb;
+    int radius = int(floor(width));
+
+    // Center tap (i = 0): hann_function(0, width_rcp) == 1.0
+     float weight_sum = 1.0;
+     vec2 chroma = textureLod(Source, vTexCoord, 0.0).gb;
+
+     // Symmetric side taps. Note that we are assuming the input size is equal
+     // to the output size.
+     for (int i = 1; i <= radius; i++) {
+         float coeff = hann_function(float(i), width_rcp);
+         weight_sum += 2.0 * coeff;
+         vec2 offset = vec2(float(i) * params.SourceSize.z, 0.0);
+         chroma += coeff * (textureLod(Source, vTexCoord + offset, 0.0).gb +
+                            textureLod(Source, vTexCoord - offset, 0.0).gb);
     }
     chroma = chroma / weight_sum;
 

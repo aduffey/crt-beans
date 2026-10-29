@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-#pragma parameter OutputGamma "Output gamma (0: sRGB, 1: 2.2 gamma)" 1.0 0.0 1.0 1.0
+#pragma parameter InterlacingType "Interlacing type (0: bob, 1: weave, 2: VGA, 3: off)" 0.0 0.0 3.0 1.0
+#pragma parameter OddFieldFirst "Interlacing phase (0: odd field first, 1: even field first)" 0.0 0.0 1.0 1.0
 #pragma parameter OverscanHorizontal "Horizontal overscan (proportion to crop)" 0.0 0.0 0.1 0.01
 #pragma parameter OverscanVertical "Vertical overscan (proportion to crop)" 0.0 0.0 0.1 0.01
 #pragma parameter MaxSpotSize "Maximum scanline size (proportion of line)" 0.90 0.6 1.0 0.05
@@ -12,5 +13,4 @@
 #pragma parameter MaskMitigation "Mask brightness boost" 1.0 0.0 1.0 0.05
 #pragma parameter GlowSigma "Glow width (proportion of screen height)" 0.05 0.01 0.10 0.01
 #pragma parameter GlowAmount "Glow amount (mix ratio)" 0.04 0.0 0.10 0.005
-#pragma parameter InterlacingType "Interlacing type (0: bob, 1: weave, 2: VGA, 3: off)" 0.0 0.0 3.0 1.0
-#pragma parameter OddFieldFirst "Interlacing phase (0: odd field first, 1: even field first)" 0.0 0.0 1.0 1.0
+#pragma parameter OutputGamma "Output gamma (0: sRGB, 1: 2.2 gamma)" 1.0 0.0 1.0 1.0
