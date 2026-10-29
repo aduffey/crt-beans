@@ -190,8 +190,8 @@ def carrier_exact_4tap(u: float, wc: float) -> tm.vec4:
 
 
 @ti.func
-def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int, wc: float) -> tm.vec2:
-    result = tm.vec2(0.0, 0.0)
+def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int, wc: float) -> tm.vec3:
+    result = tm.vec3(0.0, 0.0, 0.0)
     if 0 <= target_y < height:
         texel_coord = coord_x * samples
         texel_floor = tm.floor(texel_coord - 0.5)
@@ -212,7 +212,7 @@ def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), sam
             sx = base_x + k
             if 0 <= sx < samples:
                 s = Source[target_y, sx]
-                result += weight * tm.vec2(s.y, s.z)
+                result += weight * tm.vec3(s.y, s.z, s.w)
     return result
 
 
@@ -349,6 +349,7 @@ def taichi_ntsc_decode_filter(
     for y, x in field_out:
         weight_sum = 0.0
         chroma = tm.vec2(0.0, 0.0)
+        low_luma = 0.0
         for i in range(-i_bound, i_bound + 1):
             coeff = 0.5 + 0.5 * tm.cos(np.pi * i * width_rcp)
             weight_sum += coeff
@@ -356,10 +357,12 @@ def taichi_ntsc_decode_filter(
             if 0 <= sample_x < samples:
                 sample_val = field_in[y, sample_x]
                 chroma += coeff * tm.vec2(sample_val.y, sample_val.z)
+                low_luma += coeff * sample_val.x
         if weight_sum > 0.0:
             chroma = chroma / weight_sum
+            low_luma = low_luma / weight_sum
         comp = field_in[y, x].x
-        field_out[y, x] = tm.vec3(comp, chroma.x, chroma.y)
+        field_out[y, x] = tm.vec4(comp, chroma.x, chroma.y, low_luma)
 
 
 @ti.kernel
@@ -383,23 +386,32 @@ def taichi_ntsc_decode_comb(
         middle = field_in[y, x]
         composite = middle.x
         middle_chroma = tm.vec2(middle.y, middle.z)
+        middle_luma = middle.w
         chroma = middle_chroma
 
         if filter_type > 0.5:
             offset = (227.5 - periods_per_line) / periods_per_active_line
             upper_chroma = tm.vec2(0.0)
             lower_chroma = tm.vec2(0.0)
+            upper_luma = 0.0
+            lower_luma = 0.0
             if offset == 0.0:
                 # Aligned scanlines need no fractional-sample interpolation.
                 if y >= line_step:
                     s = field_in[y - line_step, x]
                     upper_chroma = tm.vec2(s.y, s.z)
+                    upper_luma = s.w
                 if y + line_step < height:
                     s = field_in[y + line_step, x]
                     lower_chroma = tm.vec2(s.y, s.z)
+                    lower_luma = s.w
             else:
-                upper_chroma = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
-                lower_chroma = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
+                upper_sample = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
+                lower_sample = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
+                upper_chroma = tm.vec2(upper_sample.x, upper_sample.y)
+                upper_luma = upper_sample.z
+                lower_chroma = tm.vec2(lower_sample.x, lower_sample.y)
+                lower_luma = lower_sample.z
 
             if filter_type < 1.5:
                 # 3-line comb with boundary handling
@@ -410,7 +422,7 @@ def taichi_ntsc_decode_comb(
                 else:
                     chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma
             else:
-                # Adaptive directional comb with edge fallback
+                # Adaptive directional comb with luma-guided cross-color guard
                 uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
                 m_scaled = middle_chroma * uv_scale
                 u_scaled = upper_chroma * uv_scale
@@ -418,23 +430,71 @@ def taichi_ntsc_decode_comb(
 
                 diff_u = tm.length(m_scaled - u_scaled)
                 diff_d = tm.length(m_scaled - d_scaled)
+                luma_diff_u = ti.abs(middle_luma - upper_luma)
+                luma_diff_d = ti.abs(middle_luma - lower_luma)
+
+                norm_m = tm.length(m_scaled)
+                norm_u = tm.length(u_scaled)
+                norm_d = tm.length(d_scaled)
+                r_anti_u = tm.length(m_scaled + u_scaled) / (norm_m + norm_u + 1.0e-5)
+                r_anti_d = tm.length(m_scaled + d_scaled) / (norm_m + norm_d + 1.0e-5)
 
                 if y < line_step:
                     diff_u = 999.0
+                    luma_diff_u = 999.0
+                    r_anti_u = 999.0
                 if y >= height - line_step:
                     diff_d = 999.0
+                    luma_diff_d = 999.0
+                    r_anti_d = 999.0
 
                 diff_min = tm.min(diff_u, diff_d)
                 diff_sum = diff_u + diff_d + 1.0e-5
                 k_dir = tm.clamp(((diff_u - diff_d) / diff_sum) * 3.0, -1.0, 1.0)
 
-                combed_dir = 0.5 * middle_chroma + 0.25 * ((1.0 - k_dir) * upper_chroma + (1.0 + k_dir) * lower_chroma)
+                x_left = tm.max(x - 1, 0)
+                x_right = tm.min(x + 1, samples - 1)
+                s_left = field_in[y, x_left]
+                s_right = field_in[y, x_right]
+                c_left = tm.vec2(s_left.y, s_left.z) * uv_scale
+                c_right = tm.vec2(s_right.y, s_right.z) * uv_scale
+                gh = 0.5 * tm.length(c_right - c_left)
+                r_h = (gh / diff_sum) * (samples / periods_per_active_line)
+                s_g = tm.smoothstep(0.02, 0.05, r_h)
+
+                luma_diff_max = tm.max(luma_diff_u, luma_diff_d)
+                r_sym = tm.length(u_scaled - d_scaled) / diff_sum
+                if y < line_step or y >= height - line_step:
+                    r_sym = 999.0
+
+                cross_guard_3line = (
+                    (1.0 - tm.smoothstep(0.02, 0.08, luma_diff_max))
+                    * (1.0 - tm.smoothstep(0.50, 0.70, r_sym))
+                    * s_g
+                )
+                guard_u = (
+                    (1.0 - tm.smoothstep(0.02, 0.08, luma_diff_u))
+                    * (1.0 - tm.smoothstep(0.50, 0.70, r_anti_u))
+                    * s_g
+                )
+                guard_d = (
+                    (1.0 - tm.smoothstep(0.02, 0.08, luma_diff_d))
+                    * (1.0 - tm.smoothstep(0.50, 0.70, r_anti_d))
+                    * s_g
+                )
+                cross_guard = tm.max(cross_guard_3line, tm.max(guard_u, guard_d))
+
+                k_cross = ((guard_d - guard_u) / (guard_u + guard_d + 1.0e-5)) * (1.0 - cross_guard_3line)
+                k_eff = k_dir * (1.0 - cross_guard) + k_cross * cross_guard
+
+                combed_dir = 0.5 * middle_chroma + 0.25 * ((1.0 - k_eff) * upper_chroma + (1.0 + k_eff) * lower_chroma)
                 if y < line_step:
                     combed_dir = 0.5 * (middle_chroma + lower_chroma)
                 elif y >= height - line_step:
                     combed_dir = 0.5 * (middle_chroma + upper_chroma)
 
-                w_comb = 1.0 - tm.smoothstep(0.06, 0.24, diff_min)
+                w_base = 1.0 - tm.smoothstep(0.06, 0.24, diff_min)
+                w_comb = tm.max(w_base, cross_guard)
 
                 chroma = tm.mix(middle_chroma, combed_dir, w_comb)
 
@@ -544,7 +604,7 @@ def simulate_ntsc(
 
     # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
     chroma_filter_width = 1.5 * samples / ci.periods_per_active_line
-    f_demod_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 
     # Pass 4: Y/C separation comb filter and conversion to linear RGB

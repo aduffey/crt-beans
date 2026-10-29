@@ -168,16 +168,37 @@ class TestAnalogSimulation(unittest.TestCase):
                     for mode, output in outputs.items()
                 }
                 self.assertLess(errors['comb'], errors['notch'] * 0.5)
-                if contrast == 1.0:
-                    # Strong cross-color is ambiguous with a true chroma edge.
-                    # Favor notch fallback rather than forcing combing.
-                    np.testing.assert_allclose(
-                        outputs['adaptive'][2:-2, 100:800],
-                        outputs['notch'][2:-2, 100:800], atol=1e-5, rtol=0,
-                    )
-                else:
-                    # The edge-based comb still suppresses weaker cross-color.
-                    self.assertLess(errors['adaptive'], errors['notch'] * 0.75)
+                self.assertLess(errors['adaptive'], errors['notch'] * 0.5)
+                np.testing.assert_allclose(
+                    outputs['adaptive'][2:-2, 100:800],
+                    outputs['comb'][2:-2, 100:800], atol=1e-5, rtol=0,
+                )
+
+        # Verify one-sided directional combing on a 2-scanline-tall striped bar:
+        # suppresses cross-color on both boundary scanlines without bleeding outside.
+        bar_pattern = np.full((16, 256, 3), 0.25, dtype=np.float32)
+        bar_pattern[7:9, ::2] = 1.0
+        bar_outputs = {
+            mode: filtering.simulate_ntsc(
+                bar_pattern, samples=900, ntsc_filter_type=mode,
+            )
+            for mode in ['notch', 'comb', 'adaptive']
+        }
+        bar_errors = {
+            mode: np.linalg.norm(
+                (output @ RGB_TO_YUV.T)[7:9, 100:800, 1:], axis=-1,
+            ).mean()
+            for mode, output in bar_outputs.items()
+        }
+        bleed_comb = np.linalg.norm(
+            (bar_outputs['comb'] @ RGB_TO_YUV.T)[[6, 9], 100:800, 1:], axis=-1,
+        ).mean()
+        bleed_adaptive = np.linalg.norm(
+            (bar_outputs['adaptive'] @ RGB_TO_YUV.T)[[6, 9], 100:800, 1:], axis=-1,
+        ).mean()
+        self.assertLess(bar_errors['adaptive'], bar_errors['comb'] * 0.1)
+        self.assertGreater(bleed_comb, 0.01)
+        self.assertLess(bleed_adaptive, 1e-5)
 
     def test_ntsc_comb_hanging_dots_reduction(self):
         # Sharp horizontal color boundary (Red top half, Blue bottom half)
