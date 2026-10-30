@@ -125,7 +125,7 @@ This parameter controls how the decoder separates brightness (Y) from color (C):
 
 - **Notch (0.0):** A simple notch filter as found on early TVs. This is the blurriest option.
 - **Comb (1.0):** A simple 3-line comb filter as found on high end TVs in the 80's, and common in the 90's. This is a sharper option but causes artifacts on horizontal edges (on some consoles more than others).
-- **Adaptive comb (2.0, default):** A 2D adaptive comb filter as found on TVs in the late 90's into the 2000's. This should avoid most of the artifacts of the 3-line comb but might not be as sharp.
+- **Adaptive comb (2.0, default):** A spatial adaptive filter that compares upper, lower, and centered comb candidates using chroma periodicity, horizontal chroma variation, and low-frequency luma agreement. Candidates follow the system's carrier phase: two-line pairs at 180 degrees, or three-line groups for the modeled NES/SNES 120-degree cadence. An internal limit bounds the added chroma correction to reduce damage to genuine colored detail. Some false color remains where luminance and chrominance have ambiguous spatial patterns. Genesis/SMS retain the conservative directional filter because their carrier phase does not change between lines. No temporal comb filtering is used.
 
 In bob and weave modes on interlaced input, comb filtering uses neighboring scanlines from the same field.
 

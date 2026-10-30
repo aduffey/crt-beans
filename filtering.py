@@ -349,6 +349,7 @@ def taichi_ntsc_decode_filter(
     for y, x in field_out:
         weight_sum = 0.0
         chroma = tm.vec2(0.0, 0.0)
+        low_luma = 0.0
         for i in range(-i_bound, i_bound + 1):
             coeff = 0.5 + 0.5 * tm.cos(np.pi * i * width_rcp)
             weight_sum += coeff
@@ -356,10 +357,80 @@ def taichi_ntsc_decode_filter(
             if 0 <= sample_x < samples:
                 sample_val = field_in[y, sample_x]
                 chroma += coeff * tm.vec2(sample_val.y, sample_val.z)
+                low_luma += coeff * sample_val.x
         if weight_sum > 0.0:
             chroma = chroma / weight_sum
+            low_luma = low_luma / weight_sum
         comp = field_in[y, x].x
-        field_out[y, x] = tm.vec3(comp, chroma.x, chroma.y)
+        # Low-frequency signal-domain luma is detector evidence, not output Y.
+        field_out[y, x] = tm.vec4(comp, chroma.x, chroma.y, low_luma)
+
+
+@ti.func
+def ntsc_comb_sample(source: ti.template(), y: int, x: int) -> tm.vec3:
+    sample = tm.vec3(0.0)
+    if 0 <= y < source.shape[0]:
+        value = source[y, x]
+        sample = tm.vec3(value.y, value.z, value.w)
+    return sample
+
+
+@ti.func
+def ntsc_adaptive_phase_comb(
+    middle: tm.vec3, upper: tm.vec3, lower: tm.vec3,
+    upper2: tm.vec3, lower2: tm.vec3,
+    upper_period: tm.vec3, lower_period: tm.vec3,
+    left: tm.vec2, right: tm.vec2, baseline: tm.vec2,
+    period: int, density: float, valid_upper: int, valid_lower: int,
+) -> tm.vec2:
+    """Phase-complete spatial candidates with a bounded correction to baseline.
+
+    Samples hold (U, V, low-frequency Y) in the composite signal's gamma domain.
+    Keep thresholds and the normalized 0.08 cap in sync with ntsc_decode_comb.slang.
+    """
+    uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
+    m = tm.vec2(middle.x, middle.y)
+    u = tm.vec2(upper.x, upper.y)
+    d = tm.vec2(lower.x, lower.y)
+    delta_left = (m - left) * uv_scale
+    delta_right = (right - m) * uv_scale
+    energy = density * tm.sqrt(0.5 * (tm.dot(delta_left, delta_left) + tm.dot(delta_right, delta_right)))
+    horizontal = tm.smoothstep(0.02, 0.08, energy)
+
+    periodic_u = 0.0
+    periodic_d = 0.0
+    if valid_upper != 0:
+        periodic_u = 1.0 - tm.smoothstep(0.04, 0.16, tm.length((m - tm.vec2(upper_period.x, upper_period.y)) * uv_scale))
+    if valid_lower != 0:
+        periodic_d = 1.0 - tm.smoothstep(0.04, 0.16, tm.length((m - tm.vec2(lower_period.x, lower_period.y)) * uv_scale))
+
+    luma_u = ti.abs(middle.z - upper.z)
+    luma_d = ti.abs(middle.z - lower.z)
+    center_luma = tm.max(luma_u, luma_d)
+    center = 0.5 * m + 0.25 * (u + d)
+    candidate_u = 0.5 * (m + u)
+    candidate_d = 0.5 * (m + d)
+    if period == 3:
+        # The modeled NES/SNES carrier advances 120 degrees per field line.
+        center = (m + u + d) / 3.0
+        candidate_u = (m + u + tm.vec2(upper2.x, upper2.y)) / 3.0
+        candidate_d = (m + d + tm.vec2(lower2.x, lower2.y)) / 3.0
+        luma_u = tm.max(luma_u, ti.abs(middle.z - upper2.z))
+        luma_d = tm.max(luma_d, ti.abs(middle.z - lower2.z))
+
+    confidence = tm.vec3(
+        tm.max(periodic_u, periodic_d) * (1.0 - tm.smoothstep(0.02, 0.06, center_luma)),
+        periodic_u * (1.0 - tm.smoothstep(0.02, 0.06, luma_u)),
+        periodic_d * (1.0 - tm.smoothstep(0.02, 0.06, luma_d)),
+    ) * horizontal
+    if valid_upper == 0 or valid_lower == 0:
+        confidence.x = 0.0
+    weights = confidence * confidence
+    selected = (weights.x * center + weights.y * candidate_u + weights.z * candidate_d) / tm.max(weights.x + weights.y + weights.z, 1.0e-12)
+    strength = tm.max(confidence.x, tm.max(confidence.y, confidence.z))
+    correction = strength * (selected - baseline)
+    correction *= tm.min(1.0, 0.08 / tm.max(tm.length(correction * uv_scale), 1.0e-12))
+    return baseline + correction
 
 
 @ti.kernel
@@ -378,6 +449,9 @@ def taichi_ntsc_decode_comb(
     (height, samples) = field_in.shape
     line_step = 2 if interlaced != 0 else 1
     wc = 2.0 * np.pi * (periods_per_active_line / samples)
+    line_phase = periods_per_line - tm.floor(periods_per_line)
+    period = 2 if ti.abs(line_phase - 0.5) < 1.0e-4 else 3
+    density = (samples / periods_per_active_line) * (CHROMA_SUBCARRIER * ACTIVE_LINE_TIME / 900.0)
     for y, x in field_out:
         u = (x + 0.5) / samples
         middle = field_in[y, x]
@@ -389,14 +463,14 @@ def taichi_ntsc_decode_comb(
             offset = (227.5 - periods_per_line) / periods_per_active_line
             upper_chroma = tm.vec2(0.0)
             lower_chroma = tm.vec2(0.0)
+            upper = tm.vec3(0.0)
+            lower = tm.vec3(0.0)
             if offset == 0.0:
                 # Aligned scanlines need no fractional-sample interpolation.
-                if y >= line_step:
-                    s = field_in[y - line_step, x]
-                    upper_chroma = tm.vec2(s.y, s.z)
-                if y + line_step < height:
-                    s = field_in[y + line_step, x]
-                    lower_chroma = tm.vec2(s.y, s.z)
+                upper = ntsc_comb_sample(field_in, y - line_step, x)
+                lower = ntsc_comb_sample(field_in, y + line_step, x)
+                upper_chroma = tm.vec2(upper.x, upper.y)
+                lower_chroma = tm.vec2(lower.x, lower.y)
             else:
                 upper_chroma = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
                 lower_chroma = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
@@ -437,6 +511,28 @@ def taichi_ntsc_decode_comb(
                 w_comb = 1.0 - tm.smoothstep(0.06, 0.24, diff_min)
 
                 chroma = tm.mix(middle_chroma, combed_dir, w_comb)
+
+                # Zero-phase systems (Genesis/SMS) retain the existing fallback.
+                # All new candidates use raw, unshifted samples from this field.
+                if line_phase > 1.0e-4:
+                    if offset != 0.0:
+                        upper = ntsc_comb_sample(field_in, y - line_step, x)
+                        lower = ntsc_comb_sample(field_in, y + line_step, x)
+                    upper2 = ntsc_comb_sample(field_in, y - 2 * line_step, x)
+                    lower2 = ntsc_comb_sample(field_in, y + 2 * line_step, x)
+                    upper_period = upper2
+                    lower_period = lower2
+                    if period == 3:
+                        upper_period = ntsc_comb_sample(field_in, y - 3 * line_step, x)
+                        lower_period = ntsc_comb_sample(field_in, y + 3 * line_step, x)
+                    left = ntsc_comb_sample(field_in, y, ti.max(x - 1, 0))
+                    right = ntsc_comb_sample(field_in, y, ti.min(x + 1, samples - 1))
+                    chroma = ntsc_adaptive_phase_comb(
+                        tm.vec3(middle.y, middle.z, middle.w), upper, lower,
+                        upper2, lower2, upper_period, lower_period,
+                        tm.vec2(left.x, left.y), tm.vec2(right.x, right.y), chroma,
+                        period, density, int(y >= period * line_step), int(y + period * line_step < height),
+                    )
 
         carrier = chroma_carrier(u, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
         luma = composite - chroma.x * tm.sin(carrier) - chroma.y * tm.cos(carrier)
@@ -544,7 +640,7 @@ def simulate_ntsc(
 
     # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
     chroma_filter_width = 1.5 * samples / ci.periods_per_active_line
-    f_demod_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 
     # Pass 4: Y/C separation comb filter and conversion to linear RGB

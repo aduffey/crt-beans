@@ -30,7 +30,7 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
 
 #include "chroma_carrier.inc"
 
@@ -52,7 +52,9 @@ void main() {
 
     // Center tap (i = 0): hann_function(0, width_rcp) == 1.0
      float weight_sum = 1.0;
-     vec2 chroma = textureLod(Source, vTexCoord, 0.0).gb;
+     vec3 center = textureLod(Source, vTexCoord, 0.0).rgb;
+     vec2 chroma = center.gb;
+     float low_luma = center.r;
 
      // Symmetric side taps. Note that we are assuming the input size is equal
      // to the output size.
@@ -60,11 +62,15 @@ void main() {
          float coeff = hann_function(float(i), width_rcp);
          weight_sum += 2.0 * coeff;
          vec2 offset = vec2(float(i) * params.SourceSize.z, 0.0);
-         chroma += coeff * (textureLod(Source, vTexCoord + offset, 0.0).gb +
-                            textureLod(Source, vTexCoord - offset, 0.0).gb);
+         vec3 pair = textureLod(Source, vTexCoord + offset, 0.0).rgb +
+                     textureLod(Source, vTexCoord - offset, 0.0).rgb;
+         chroma += coeff * pair.gb;
+         low_luma += coeff * pair.r;
     }
     chroma = chroma / weight_sum;
+    low_luma = low_luma / weight_sum;
 
     float composite = texelFetch(Source, texel_loc, 0).r;
-    FragColor.rgb = vec3(composite, chroma.r, chroma.g);
+    // Low-frequency signal-domain luma for adaptive decisions, not output Y.
+    FragColor = vec4(composite, chroma.r, chroma.g, low_luma);
 }

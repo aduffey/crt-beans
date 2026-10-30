@@ -169,12 +169,9 @@ class TestAnalogSimulation(unittest.TestCase):
                 }
                 self.assertLess(errors['comb'], errors['notch'] * 0.5)
                 if contrast == 1.0:
-                    # Strong cross-color is ambiguous with a true chroma edge.
-                    # Favor notch fallback rather than forcing combing.
-                    np.testing.assert_allclose(
-                        outputs['adaptive'][2:-2, 100:800],
-                        outputs['notch'][2:-2, 100:800], atol=1e-5, rtol=0,
-                    )
+                    # Phase evidence now permits a bounded correction even
+                    # when the original chroma-edge detector rejects combing.
+                    self.assertLess(errors['adaptive'], errors['notch'] * 0.95)
                 else:
                     # The edge-based comb still suppresses weaker cross-color.
                     self.assertLess(errors['adaptive'], errors['notch'] * 0.75)
@@ -281,11 +278,56 @@ class TestAnalogSimulation(unittest.TestCase):
                 )
 
     def test_ntsc_boundary_safety(self):
-        # Image with small height to test boundary conditions
-        small_img = np.full((3, 16, 3), 0.5, dtype=np.float32)
-        out = filtering.simulate_ntsc(small_img, samples=32, ntsc_filter_type='adaptive')
-        self.assertEqual(out.shape, (3, 32, 3))
-        self.assertTrue(np.all(np.isfinite(out)))
+        import taichi as ti
+
+        # Exercise the comb stage directly, reusing its fields across systems.
+        # Repeated complete pipelines accumulate Taichi field trees in the suite.
+        rng = np.random.default_rng(918)
+        for height in [1, 2, 3, 5]:
+            packed = rng.uniform(-0.1, 0.1, (height, 32, 4)).astype(np.float32)
+            packed[..., 0] = packed[..., 3] = 0.5
+            source = ti.Vector.field(4, ti.f32, shape=(height, 32))
+            output = ti.Vector.field(3, ti.f32, shape=(height, 32))
+            source.from_numpy(packed)
+            for system in ['standard', 'snes', 'genesis']:
+                with self.subTest(system=system, height=height):
+                    ci = filtering.get_chroma_info(system, 256, 0)
+                    filtering.taichi_ntsc_decode_comb(
+                        source, output, 2.0, 0, ci.periods_per_active_line,
+                        ci.periods_per_line, ci.offset_per_frame, 2.4, 0, 1,
+                    )
+                    out = output.to_numpy()
+                    self.assertEqual(out.shape, (height, 32, 3))
+                    self.assertTrue(np.all(np.isfinite(out)))
+
+    def test_ntsc_comb_same_field_isolation(self):
+        import taichi as ti
+
+        # Altering the other field must not influence any same-field candidate,
+        # including the period-three lookahead and boundary fallback.
+        rng = np.random.default_rng(537)
+        pattern = np.full((304, 600, 4), 0.5, dtype=np.float32)
+        source = ti.Vector.field(4, ti.f32, shape=pattern.shape[:2])
+        output = ti.Vector.field(3, ti.f32, shape=pattern.shape[:2])
+        for system in ['standard', 'snes']:
+            with self.subTest(system=system):
+                ci = filtering.get_chroma_info(system, 256, 1)
+                period = 2 if system == 'standard' else 3
+                phase = (2 * np.pi / period * (np.arange(304) // 2)[:, None]
+                         + 0.5 * np.arange(600)[None, :])
+                pattern[..., 1] = 0.05 * np.cos(phase)
+                pattern[..., 2] = 0.05 * np.sin(phase)
+                changed = pattern.copy()
+                changed[1::2] = rng.uniform(0.1, 0.9, changed[1::2].shape)
+                results = []
+                for packed in [pattern, changed]:
+                    source.from_numpy(packed)
+                    filtering.taichi_ntsc_decode_comb(
+                        source, output, 2.0, 1, ci.periods_per_active_line,
+                        ci.periods_per_line, ci.offset_per_frame, 2.4, 1, 1,
+                    )
+                    results.append(output.to_numpy())
+                np.testing.assert_array_equal(results[0][::2], results[1][::2])
 
     def test_ntsc_carrier_exact_interpolator_invariants(self):
         # Verify algebraic invariants of the 4-tap carrier-exact comb interpolator
@@ -563,6 +605,91 @@ class TestAnalogSimulation(unittest.TestCase):
                 self.assertAlmostEqual(
                     ci.periods_per_active_line, width * clocks_per_pixel / 15.0,
                 )
+
+
+class TestAdaptivePhaseComb(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import taichi as ti
+        import taichi.math as tm
+
+        @ti.kernel
+        def evaluate(
+            data: ti.types.ndarray(dtype=tm.vec3, ndim=1),
+            period: int, density: float, valid_upper: int, valid_lower: int,
+        ) -> tm.vec2:
+            return filtering.ntsc_adaptive_phase_comb(
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6],
+                data[7].xy, data[8].xy, data[9].xy,
+                period, density, valid_upper, valid_lower,
+            )
+
+        cls.evaluate = staticmethod(evaluate)
+
+    def samples(self, period, amplitude=0.05):
+        # A repeating false-color phasor atop constant luma and true chroma.
+        rows = np.array([0, -1, 1, -2, 2, -period, period])
+        phase = rows * 2 * np.pi / period
+        data = np.zeros((10, 3), dtype=np.float32)
+        truth = np.array([0.06, -0.03], dtype=np.float32)
+        data[:7, :2] = truth + amplitude * np.stack([np.cos(phase), np.sin(phase)], axis=-1)
+        data[:, 2] = 0.5
+        data[7:9, :2] = truth - amplitude
+        data[9] = data[0]  # Baseline before the added correction.
+        return data, truth
+
+    def test_phase_cancellation_and_one_sided_boundaries(self):
+        for period in [2, 3]:
+            data, truth = self.samples(period, amplitude=0.02)
+            for upper, lower in [(1, 1), (1, 0), (0, 1)]:
+                with self.subTest(period=period, upper=upper, lower=lower):
+                    result = self.evaluate(data, period, 2.0, upper, lower)
+                    np.testing.assert_allclose(result, truth, atol=1e-7, rtol=0)
+
+    def test_correction_bound(self):
+        uv_scale = np.array([1 / 0.436, 1 / 0.615])
+        for period in [2, 3]:
+            data, _ = self.samples(period, amplitude=0.3)
+            result = np.array(self.evaluate(data, period, 1.0, 1, 1))
+            magnitude = np.linalg.norm((result - data[9, :2]) * uv_scale)
+            self.assertAlmostEqual(magnitude, 0.08, places=6)
+
+        # Arbitrary detector inputs must never exceed the same bound, even
+        # when the baseline differs from the middle row or no candidate wins.
+        rng = np.random.default_rng(731)
+        for _ in range(100):
+            data = rng.uniform(-0.5, 0.5, (10, 3)).astype(np.float32)
+            data[:, 2] = 0.5
+            data[5:7] = data[0]
+            result = np.array(self.evaluate(data, 3, 1.0, 1, 1))
+            self.assertTrue(np.isfinite(result).all())
+            self.assertLessEqual(np.linalg.norm((result - data[9, :2]) * uv_scale), 0.080001)
+
+    def test_confidence_guards_and_missing_support(self):
+        for period in [2, 3]:
+            for guard in ['horizontal', 'luma', 'periodicity', 'support']:
+                with self.subTest(period=period, guard=guard):
+                    data, _ = self.samples(period)
+                    valid = 1
+                    if guard == 'horizontal':
+                        data[7:9] = data[0]
+                    elif guard == 'luma':
+                        data[1:5, 2] = 0.7
+                    elif guard == 'periodicity':
+                        data[5:7, :2] += 0.2
+                    else:
+                        valid = 0
+                    result = self.evaluate(data, period, 1.0, valid, valid)
+                    np.testing.assert_allclose(result, data[9, :2], atol=1e-7, rtol=0)
+
+    def test_directional_luma_guard(self):
+        for period in [2, 3]:
+            data, truth = self.samples(period, amplitude=0.02)
+            # A lower-side edge must not veto the safe upper candidate.
+            data[2, 2] += 0.2
+            data[2, :2] += 0.2
+            result = self.evaluate(data, period, 2.0, 1, 1)
+            np.testing.assert_allclose(result, truth, atol=1e-7, rtol=0)
 
 
 class TestScanlineMethods(unittest.TestCase):
