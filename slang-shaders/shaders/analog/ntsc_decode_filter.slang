@@ -51,20 +51,25 @@ void main() {
     int radius = int(floor(width));
 
     // Center tap (i = 0): hann_function(0, width_rcp) == 1.0
-     float weight_sum = 1.0;
-     vec2 chroma = textureLod(Source, vTexCoord, 0.0).gb;
+    float weight_sum = 1.0;
+    vec3 center_sample = textureLod(Source, vTexCoord, 0.0).rgb;
+    vec2 chroma = center_sample.gb;
+    float low_luma = center_sample.r;
 
-     // Symmetric side taps. Note that we are assuming the input size is equal
-     // to the output size.
-     for (int i = 1; i <= radius; i++) {
-         float coeff = hann_function(float(i), width_rcp);
-         weight_sum += 2.0 * coeff;
-         vec2 offset = vec2(float(i) * params.SourceSize.z, 0.0);
-         chroma += coeff * (textureLod(Source, vTexCoord + offset, 0.0).gb +
-                            textureLod(Source, vTexCoord - offset, 0.0).gb);
+    // Symmetric side taps. Note that we are assuming the input size is equal
+    // to the output size.
+    for (int i = 1; i <= radius; i++) {
+        float coeff = hann_function(float(i), width_rcp);
+        weight_sum += 2.0 * coeff;
+        vec2 offset = vec2(float(i) * params.SourceSize.z, 0.0);
+        vec3 pos_sample = textureLod(Source, vTexCoord + offset, 0.0).rgb;
+        vec3 neg_sample = textureLod(Source, vTexCoord - offset, 0.0).rgb;
+        chroma += coeff * (pos_sample.gb + neg_sample.gb);
+        low_luma += coeff * (pos_sample.r + neg_sample.r);
     }
     chroma = chroma / weight_sum;
+    low_luma = low_luma / weight_sum;
 
     float composite = texelFetch(Source, texel_loc, 0).r;
-    FragColor.rgb = vec3(composite, chroma.r, chroma.g);
+    FragColor = vec4(composite, chroma.r, chroma.g, low_luma);
 }

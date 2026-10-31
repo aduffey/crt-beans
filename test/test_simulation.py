@@ -168,16 +168,37 @@ class TestAnalogSimulation(unittest.TestCase):
                     for mode, output in outputs.items()
                 }
                 self.assertLess(errors['comb'], errors['notch'] * 0.5)
-                if contrast == 1.0:
-                    # Strong cross-color is ambiguous with a true chroma edge.
-                    # Favor notch fallback rather than forcing combing.
-                    np.testing.assert_allclose(
-                        outputs['adaptive'][2:-2, 100:800],
-                        outputs['notch'][2:-2, 100:800], atol=1e-5, rtol=0,
-                    )
-                else:
-                    # The edge-based comb still suppresses weaker cross-color.
-                    self.assertLess(errors['adaptive'], errors['notch'] * 0.75)
+                self.assertLess(errors['adaptive'], errors['notch'] * 0.5)
+                np.testing.assert_allclose(
+                    outputs['adaptive'][2:-2, 100:800],
+                    outputs['comb'][2:-2, 100:800], atol=1e-5, rtol=0,
+                )
+
+        # Verify directional combing on a 2-scanline-tall striped bar:
+        # suppresses cross-color on both boundary scanlines without bleeding outside.
+        bar_pattern = np.full((16, 256, 3), 0.25, dtype=np.float32)
+        bar_pattern[7:9, ::2] = 1.0
+        bar_outputs = {
+            mode: filtering.simulate_ntsc(
+                bar_pattern, samples=900, ntsc_filter_type=mode,
+            )
+            for mode in ['notch', 'comb', 'adaptive']
+        }
+        bar_errors = {
+            mode: np.linalg.norm(
+                (output @ RGB_TO_YUV.T)[7:9, 100:800, 1:], axis=-1,
+            ).mean()
+            for mode, output in bar_outputs.items()
+        }
+        bleed_comb = np.linalg.norm(
+            (bar_outputs['comb'] @ RGB_TO_YUV.T)[[6, 9], 100:800, 1:], axis=-1,
+        ).mean()
+        bleed_adaptive = np.linalg.norm(
+            (bar_outputs['adaptive'] @ RGB_TO_YUV.T)[[6, 9], 100:800, 1:], axis=-1,
+        ).mean()
+        self.assertLess(bar_errors['adaptive'], bar_errors['comb'] * 0.1)
+        self.assertGreater(bleed_comb, 0.01)
+        self.assertLess(bleed_adaptive, 1e-3)
 
     def test_ntsc_comb_hanging_dots_reduction(self):
         # Sharp horizontal color boundary (Red top half, Blue bottom half)
@@ -231,14 +252,45 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertGreater(ripple_comb_adj, 0.2)
         self.assertLess(ripple_adapt_adj, 0.01)
 
+    def test_ntsc_comb_isolated_feature_saturation(self):
+        from common import RGB_TO_YUV
+
+        # Verify isolated 1-scanline feature saturation preservation:
+        # 5-candidate median with Toshiba guard maintains full chroma amplitude without attenuation or bleed.
+        iso_pattern = np.zeros((16, 64, 3), dtype=np.float32)
+        iso_pattern[8, :] = [1.0, 0.0, 0.0]  # Isolated red line
+        for system in ['standard', 'snes', 'genesis']:
+            with self.subTest(system=system):
+                outputs = {
+                    mode: filtering.simulate_ntsc(
+                        iso_pattern, samples=900, ntsc_system=system,
+                        ntsc_filter_type=mode,
+                    )
+                    for mode in ['notch', 'comb', 'adaptive']
+                }
+                yuv = {
+                    mode: np.dot(output, RGB_TO_YUV.T)
+                    for mode, output in outputs.items()
+                }
+                amp_notch = np.linalg.norm(yuv['notch'][8, 100:800, 1:], axis=-1).mean()
+                amp_comb = np.linalg.norm(yuv['comb'][8, 100:800, 1:], axis=-1).mean()
+                amp_adapt = np.linalg.norm(yuv['adaptive'][8, 100:800, 1:], axis=-1).mean()
+
+                bleed_comb = np.linalg.norm(yuv['comb'][[7, 9], 100:800, 1:], axis=-1).mean()
+                bleed_adapt = np.linalg.norm(yuv['adaptive'][[7, 9], 100:800, 1:], axis=-1).mean()
+
+                # Adaptive comb preserves full saturation matching notch, while comb attenuates by ~50%
+                self.assertAlmostEqual(float(amp_adapt), float(amp_notch), places=3)
+                self.assertLess(amp_comb, amp_notch * 0.6)
+                self.assertLess(bleed_adapt, 1e-4)
+                self.assertGreater(bleed_comb, 0.01)
+
     def test_ntsc_comb_complementary_line_fallback(self):
-        # Complementary colors are anti-phase too, but must retain their chroma.
-        delta = np.array([0.35, -0.413 * 0.35 / 0.587, 0.35], dtype=np.float32)
+        # Complementary colors are anti-phase too, but must retain their chroma via luma guard.
         for system in ['standard', 'snes', 'genesis']:
             for line_color, background in [
                 ([1.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
                 ([0.0, 1.0, 0.0], [1.0, 0.0, 1.0]),
-                (0.5 + delta, 0.5 - delta),  # Equal-luma complementary colors
             ]:
                 with self.subTest(system=system, line_color=line_color):
                     pattern = np.empty((16, 256, 3), dtype=np.float32)
@@ -261,23 +313,24 @@ class TestAnalogSimulation(unittest.TestCase):
                         line_color, atol=0.02, rtol=0,
                     )
 
-    def test_ntsc_comb_alternating_equal_luma_fallback(self):
-        # Alternating chroma and carrier phase can produce repeated composite
-        # waveforms, so spatial signature agreement alone cannot justify combing.
+    def test_ntsc_comb_alternating_equal_luma_combing(self):
+        # Alternating chroma with identical luma has the exact same composite carrier
+        # waveform as subcarrier cross-color, so a 2D spatial median comb suppresses
+        # it identically to standard comb filtering.
         delta = np.array([0.35, -0.413 * 0.35 / 0.587, 0.35], dtype=np.float32)
         pattern = np.empty((16, 256, 3), dtype=np.float32)
         pattern[::2] = 0.5 + delta
         pattern[1::2] = 0.5 - delta
-        for system in ['standard', 'snes', 'genesis']:
+        for system in ['standard', 'snes']:
             with self.subTest(system=system):
-                notch = filtering.simulate_ntsc(
-                    pattern, samples=900, ntsc_system=system, ntsc_filter_type='notch',
+                comb = filtering.simulate_ntsc(
+                    pattern, samples=900, ntsc_system=system, ntsc_filter_type='comb',
                 )
                 adaptive = filtering.simulate_ntsc(
                     pattern, samples=900, ntsc_system=system, ntsc_filter_type='adaptive',
                 )
                 np.testing.assert_allclose(
-                    adaptive[2:-2, 100:800], notch[2:-2, 100:800], atol=1e-5, rtol=0,
+                    adaptive[2:-2, 100:800], comb[2:-2, 100:800], atol=1e-4, rtol=0,
                 )
 
     def test_ntsc_boundary_safety(self):

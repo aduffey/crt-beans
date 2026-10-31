@@ -69,12 +69,18 @@ layout(binding = 1) uniform sampler2D Source;
 
 #include "../colorspace/conversions.inc"
 
-vec2 interpolate4(vec2 center_coord, vec4 w) {
-    vec2 result = w.x * textureLodOffset(Source, center_coord, 0.0, ivec2(-1, 0)).gb;
-    result += w.y * textureLodOffset(Source, center_coord, 0.0, ivec2( 0, 0)).gb;
-    result += w.z * textureLodOffset(Source, center_coord, 0.0, ivec2( 1, 0)).gb;
-    result += w.w * textureLodOffset(Source, center_coord, 0.0, ivec2( 2, 0)).gb;
+vec3 interpolate4(vec2 center_coord, vec4 w) {
+    vec3 result = w.x * textureLodOffset(Source, center_coord, 0.0, ivec2(-1, 0)).gba;
+    result += w.y * textureLodOffset(Source, center_coord, 0.0, ivec2( 0, 0)).gba;
+    result += w.z * textureLodOffset(Source, center_coord, 0.0, ivec2( 1, 0)).gba;
+    result += w.w * textureLodOffset(Source, center_coord, 0.0, ivec2( 2, 0)).gba;
     return result;
+}
+
+void sort_pair(inout vec2 a, inout vec2 b) {
+    vec2 mn = min(a, b);
+    b = max(a, b);
+    a = mn;
 }
 
 void main() {
@@ -84,9 +90,10 @@ void main() {
     int line_step = interlaced ? 2 : 1;
     float uv_step_y = float(line_step) * params.SourceSize.w;
 
-    vec3 middle = texelFetch(Source, texel_loc, 0).rgb;
+    vec4 middle = texelFetch(Source, texel_loc, 0);
     float composite = middle.r;
     vec2 middle_chroma = middle.gb;
+    float middle_luma = middle.a;
     vec2 chroma = middle_chroma;
 
     if (params.FilterType > 0.5) {
@@ -94,19 +101,29 @@ void main() {
         float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
         vec2 upper_chroma = vec2(0.0);
         vec2 lower_chroma = vec2(0.0);
+        float upper_luma = 0.0;
+        float lower_luma = 0.0;
         if (offset == 0.0) {
             // Aligned scanlines need no fractional-sample interpolation.
             if (texel_loc.y >= line_step) {
-                upper_chroma = texelFetch(Source, texel_loc + ivec2(0, -line_step), 0).gb;
+                vec3 upper = texelFetch(Source, texel_loc + ivec2(0, -line_step), 0).gba;
+                upper_chroma = upper.xy;
+                upper_luma = upper.z;
             }
             if (texel_loc.y + line_step < int(params.SourceSize.y)) {
-                lower_chroma = texelFetch(Source, texel_loc + ivec2(0, line_step), 0).gb;
+                vec3 lower = texelFetch(Source, texel_loc + ivec2(0, line_step), 0).gba;
+                lower_chroma = lower.xy;
+                lower_luma = lower.z;
             }
         } else {
             float shift_u = floor(-offset * params.SourceSize.x) * params.SourceSize.z;
             float shift_l = floor( offset * params.SourceSize.x) * params.SourceSize.z;
-            upper_chroma = interpolate4(vec2(vTexCoord.x + shift_u, vTexCoord.y - uv_step_y), vWeightsUpper);
-            lower_chroma = interpolate4(vec2(vTexCoord.x + shift_l, vTexCoord.y + uv_step_y), vWeightsLower);
+            vec3 upper = interpolate4(vec2(vTexCoord.x + shift_u, vTexCoord.y - uv_step_y), vWeightsUpper);
+            vec3 lower = interpolate4(vec2(vTexCoord.x + shift_l, vTexCoord.y + uv_step_y), vWeightsLower);
+            upper_chroma = upper.xy;
+            upper_luma = upper.z;
+            lower_chroma = lower.xy;
+            lower_luma = lower.z;
         }
 
         if (params.FilterType < 1.5) {
@@ -119,40 +136,50 @@ void main() {
                 chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma;
             }
         } else {
-            // Adaptive directional comb with edge fallback
-            vec2 uv_scale = vec2(1.0 / 0.436, 1.0 / 0.615);
-            vec2 m_scaled = middle_chroma * uv_scale;
-            vec2 u_scaled = upper_chroma * uv_scale;
-            vec2 d_scaled = lower_chroma * uv_scale;
-
-            float diff_u = length(m_scaled - u_scaled);
-            float diff_d = length(m_scaled - d_scaled);
-
+            // 5-candidate median comb with Toshiba isolated-feature guard
             if (texel_loc.y < line_step) {
-                diff_u = 999.0;
-            }
-            if (texel_loc.y >= int(params.SourceSize.y) - line_step) {
-                diff_d = 999.0;
-            }
-
-            // First the directional parameter. Evaluate if we should use the
-            // top comb, bottom comb, or 3 line comb and blend between them.
-            float diff_min = min(diff_u, diff_d);
-            float diff_sum = diff_u + diff_d + 1.0e-5;
-            float k_dir = clamp(((diff_u - diff_d) / diff_sum) * 3.0, -1.0, 1.0);
-
-            vec2 combed_dir = 0.5 * middle_chroma + 0.25 * ((1.0 - k_dir) * upper_chroma + (1.0 + k_dir) * lower_chroma);
-            if (texel_loc.y < line_step) {
-                combed_dir = 0.5 * (middle_chroma + lower_chroma);
+                chroma = 0.5 * (middle_chroma + lower_chroma);
             } else if (texel_loc.y >= int(params.SourceSize.y) - line_step) {
-                combed_dir = 0.5 * (middle_chroma + upper_chroma);
+                chroma = 0.5 * (middle_chroma + upper_chroma);
+            } else {
+                vec2 cand_u = 0.5 * (middle_chroma + upper_chroma);
+                vec2 cand_d = 0.5 * (middle_chroma + lower_chroma);
+
+                vec2 c0 = middle_chroma;
+                vec2 c1 = upper_chroma;
+                vec2 c2 = lower_chroma;
+                vec2 c3 = cand_u;
+                vec2 c4 = cand_d;
+
+                // Branchless 9-comparator SIMD sorting network
+                sort_pair(c0, c1);
+                sort_pair(c3, c4);
+                sort_pair(c2, c4);
+                sort_pair(c2, c3);
+                sort_pair(c0, c3);
+                sort_pair(c1, c4);
+                sort_pair(c0, c2);
+                sort_pair(c1, c3);
+                sort_pair(c1, c2);
+
+                vec2 c_med5 = c2;
+
+                // Toshiba US5548342A isolated-feature detector
+                float luma_delta_u = middle_luma - upper_luma;
+                float luma_delta_d = middle_luma - lower_luma;
+                float iso_luma = max(0.0, min(abs(luma_delta_u), abs(luma_delta_d)) * (sign(luma_delta_u) * sign(luma_delta_d)));
+                float w_iso_luma = smoothstep(0.04, 0.12, iso_luma);
+
+                vec2 uv_scale = vec2(1.0 / 0.436, 1.0 / 0.615);
+                float norm_m = length(middle_chroma * uv_scale);
+                float norm_u = length(upper_chroma * uv_scale);
+                float norm_d = length(lower_chroma * uv_scale);
+                float iso_chroma = max(0.0, norm_m - 1.5 * max(norm_u, norm_d));
+                float w_iso_chroma = smoothstep(0.04, 0.12, iso_chroma);
+
+                float w_iso = max(w_iso_luma, w_iso_chroma);
+                chroma = mix(c_med5, middle_chroma, w_iso);
             }
-
-            // Now decide if we need to disable the comb filter (when there is
-            // a large difference on the top *and* the bottom).
-            float w_comb = 1.0 - smoothstep(0.06, 0.24, diff_min);
-
-            chroma = mix(middle_chroma, combed_dir, w_comb);
         }
     }
 

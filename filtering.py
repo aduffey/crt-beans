@@ -190,8 +190,8 @@ def carrier_exact_4tap(u: float, wc: float) -> tm.vec4:
 
 
 @ti.func
-def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int, wc: float) -> tm.vec2:
-    result = tm.vec2(0.0, 0.0)
+def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int, wc: float) -> tm.vec3:
+    result = tm.vec3(0.0, 0.0, 0.0)
     if 0 <= target_y < height:
         texel_coord = coord_x * samples
         texel_floor = tm.floor(texel_coord - 0.5)
@@ -212,7 +212,7 @@ def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), sam
             sx = base_x + k
             if 0 <= sx < samples:
                 s = Source[target_y, sx]
-                result += weight * tm.vec2(s.y, s.z)
+                result += weight * tm.vec3(s.y, s.z, s.w)
     return result
 
 
@@ -349,6 +349,7 @@ def taichi_ntsc_decode_filter(
     for y, x in field_out:
         weight_sum = 0.0
         chroma = tm.vec2(0.0, 0.0)
+        low_luma = 0.0
         for i in range(-i_bound, i_bound + 1):
             coeff = 0.5 + 0.5 * tm.cos(np.pi * i * width_rcp)
             weight_sum += coeff
@@ -356,10 +357,17 @@ def taichi_ntsc_decode_filter(
             if 0 <= sample_x < samples:
                 sample_val = field_in[y, sample_x]
                 chroma += coeff * tm.vec2(sample_val.y, sample_val.z)
+                low_luma += coeff * sample_val.x
         if weight_sum > 0.0:
             chroma = chroma / weight_sum
+            low_luma = low_luma / weight_sum
         comp = field_in[y, x].x
-        field_out[y, x] = tm.vec3(comp, chroma.x, chroma.y)
+        field_out[y, x] = tm.vec4(comp, chroma.x, chroma.y, low_luma)
+
+
+@ti.func
+def sort_pair(a: tm.vec2, b: tm.vec2):
+    return tm.min(a, b), tm.max(a, b)
 
 
 @ti.kernel
@@ -383,23 +391,32 @@ def taichi_ntsc_decode_comb(
         middle = field_in[y, x]
         composite = middle.x
         middle_chroma = tm.vec2(middle.y, middle.z)
+        middle_luma = middle.w
         chroma = middle_chroma
 
         if filter_type > 0.5:
             offset = (227.5 - periods_per_line) / periods_per_active_line
             upper_chroma = tm.vec2(0.0)
             lower_chroma = tm.vec2(0.0)
+            upper_luma = 0.0
+            lower_luma = 0.0
             if offset == 0.0:
                 # Aligned scanlines need no fractional-sample interpolation.
                 if y >= line_step:
                     s = field_in[y - line_step, x]
                     upper_chroma = tm.vec2(s.y, s.z)
+                    upper_luma = s.w
                 if y + line_step < height:
                     s = field_in[y + line_step, x]
                     lower_chroma = tm.vec2(s.y, s.z)
+                    lower_luma = s.w
             else:
-                upper_chroma = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
-                lower_chroma = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
+                upper_sample = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
+                lower_sample = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
+                upper_chroma = tm.vec2(upper_sample.x, upper_sample.y)
+                upper_luma = upper_sample.z
+                lower_chroma = tm.vec2(lower_sample.x, lower_sample.y)
+                lower_luma = lower_sample.z
 
             if filter_type < 1.5:
                 # 3-line comb with boundary handling
@@ -410,33 +427,47 @@ def taichi_ntsc_decode_comb(
                 else:
                     chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma
             else:
-                # Adaptive directional comb with edge fallback
-                uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
-                m_scaled = middle_chroma * uv_scale
-                u_scaled = upper_chroma * uv_scale
-                d_scaled = lower_chroma * uv_scale
-
-                diff_u = tm.length(m_scaled - u_scaled)
-                diff_d = tm.length(m_scaled - d_scaled)
-
+                # 5-candidate median comb with Toshiba isolated-feature guard
                 if y < line_step:
-                    diff_u = 999.0
-                if y >= height - line_step:
-                    diff_d = 999.0
-
-                diff_min = tm.min(diff_u, diff_d)
-                diff_sum = diff_u + diff_d + 1.0e-5
-                k_dir = tm.clamp(((diff_u - diff_d) / diff_sum) * 3.0, -1.0, 1.0)
-
-                combed_dir = 0.5 * middle_chroma + 0.25 * ((1.0 - k_dir) * upper_chroma + (1.0 + k_dir) * lower_chroma)
-                if y < line_step:
-                    combed_dir = 0.5 * (middle_chroma + lower_chroma)
+                    chroma = 0.5 * (middle_chroma + lower_chroma)
                 elif y >= height - line_step:
-                    combed_dir = 0.5 * (middle_chroma + upper_chroma)
+                    chroma = 0.5 * (middle_chroma + upper_chroma)
+                else:
+                    cand_u = 0.5 * (middle_chroma + upper_chroma)
+                    cand_d = 0.5 * (middle_chroma + lower_chroma)
 
-                w_comb = 1.0 - tm.smoothstep(0.06, 0.24, diff_min)
+                    c0 = middle_chroma
+                    c1 = upper_chroma
+                    c2 = lower_chroma
+                    c3 = cand_u
+                    c4 = cand_d
 
-                chroma = tm.mix(middle_chroma, combed_dir, w_comb)
+                    c0, c1 = sort_pair(c0, c1)
+                    c3, c4 = sort_pair(c3, c4)
+                    c2, c4 = sort_pair(c2, c4)
+                    c2, c3 = sort_pair(c2, c3)
+                    c0, c3 = sort_pair(c0, c3)
+                    c1, c4 = sort_pair(c1, c4)
+                    c0, c2 = sort_pair(c0, c2)
+                    c1, c3 = sort_pair(c1, c3)
+                    c1, c2 = sort_pair(c1, c2)
+                    c_med5 = c2
+
+                    # Toshiba US5548342A isolated-feature detector
+                    luma_delta_u = middle_luma - upper_luma
+                    luma_delta_d = middle_luma - lower_luma
+                    iso_luma = tm.max(0.0, tm.min(ti.abs(luma_delta_u), ti.abs(luma_delta_d)) * (tm.sign(luma_delta_u) * tm.sign(luma_delta_d)))
+                    w_iso_luma = tm.smoothstep(0.04, 0.12, iso_luma)
+
+                    uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
+                    norm_m = tm.length(middle_chroma * uv_scale)
+                    norm_u = tm.length(upper_chroma * uv_scale)
+                    norm_d = tm.length(lower_chroma * uv_scale)
+                    iso_chroma = tm.max(0.0, norm_m - 1.5 * tm.max(norm_u, norm_d))
+                    w_iso_chroma = tm.smoothstep(0.04, 0.12, iso_chroma)
+
+                    w_iso = tm.max(w_iso_luma, w_iso_chroma)
+                    chroma = tm.mix(c_med5, middle_chroma, w_iso)
 
         carrier = chroma_carrier(u, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
         luma = composite - chroma.x * tm.sin(carrier) - chroma.y * tm.cos(carrier)
@@ -544,7 +575,7 @@ def simulate_ntsc(
 
     # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
     chroma_filter_width = 1.5 * samples / ci.periods_per_active_line
-    f_demod_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 
     # Pass 4: Y/C separation comb filter and conversion to linear RGB
