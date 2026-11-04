@@ -365,11 +365,6 @@ def taichi_ntsc_decode_filter(
         field_out[y, x] = tm.vec4(comp, chroma.x, chroma.y, low_luma)
 
 
-@ti.func
-def sort_pair(a: tm.vec2, b: tm.vec2):
-    return tm.min(a, b), tm.max(a, b)
-
-
 @ti.kernel
 def taichi_ntsc_decode_comb(
     field_in: ti.template(),
@@ -433,31 +428,30 @@ def taichi_ntsc_decode_comb(
                 elif y >= height - line_step:
                     chroma = 0.5 * (middle_chroma + upper_chroma)
                 else:
-                    cand_u = 0.5 * (middle_chroma + upper_chroma)
-                    cand_d = 0.5 * (middle_chroma + lower_chroma)
+                    # 5-candidate median over {middle, upper, lower, (middle+upper)/2, (middle+lower)/2}
+                    # Because the two averaged candidates are midpoints bounded between middle and
+                    # their respective adjacent lines, the 5-element median simplifies algebraically
+                    # to clamping middle_chroma within bounds determined by upper and lower chroma.
+                    u_min = tm.min(upper_chroma, lower_chroma)
+                    u_max = tm.max(upper_chroma, lower_chroma)
+                    cand_min = 0.5 * (middle_chroma + u_min)
+                    cand_max = 0.5 * (middle_chroma + u_max)
+                    lo = tm.min(u_min, cand_max)
+                    hi = tm.max(u_max, cand_min)
+                    c_med5 = tm.clamp(middle_chroma, lo, hi)
 
-                    c0 = middle_chroma
-                    c1 = upper_chroma
-                    c2 = lower_chroma
-                    c3 = cand_u
-                    c4 = cand_d
-
-                    c0, c1 = sort_pair(c0, c1)
-                    c3, c4 = sort_pair(c3, c4)
-                    c2, c4 = sort_pair(c2, c4)
-                    c2, c3 = sort_pair(c2, c3)
-                    c0, c3 = sort_pair(c0, c3)
-                    c1, c4 = sort_pair(c1, c4)
-                    c0, c2 = sort_pair(c0, c2)
-                    c1, c3 = sort_pair(c1, c3)
-                    c1, c2 = sort_pair(c1, c2)
-                    c_med5 = c2
-
-                    # Toshiba US5548342A isolated-feature detector
-                    luma_delta_u = middle_luma - upper_luma
-                    luma_delta_d = middle_luma - lower_luma
-                    iso_luma = tm.max(0.0, tm.min(ti.abs(luma_delta_u), ti.abs(luma_delta_d)) * (tm.sign(luma_delta_u) * tm.sign(luma_delta_d)))
-                    w_iso_luma = tm.smoothstep(0.04, 0.12, iso_luma)
+                    # Toshiba US5548342A isolated-feature detector with relative luma scaling
+                    # and phase-aware single-neighbor boundary gating.
+                    luma_delta_u = ti.abs(middle_luma - upper_luma) / tm.max(tm.max(middle_luma, upper_luma), 0.05)
+                    luma_delta_d = ti.abs(middle_luma - lower_luma) / tm.max(tm.max(middle_luma, lower_luma), 0.05)
+                    w_luma_u = tm.smoothstep(0.04, 0.12, luma_delta_u)
+                    w_luma_d = tm.smoothstep(0.04, 0.12, luma_delta_d)
+                    same_phase_d = tm.step(0.0, tm.dot(middle_chroma, lower_chroma))
+                    same_phase_u = tm.step(0.0, tm.dot(middle_chroma, upper_chroma))
+                    w_iso_luma = tm.max(
+                        tm.min(w_luma_u, w_luma_d),
+                        tm.max(w_luma_u * same_phase_d, w_luma_d * same_phase_u),
+                    )
 
                     uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
                     norm_m = tm.length(middle_chroma * uv_scale)

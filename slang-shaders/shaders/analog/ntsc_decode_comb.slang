@@ -77,12 +77,6 @@ vec3 interpolate4(vec2 center_coord, vec4 w) {
     return result;
 }
 
-void sort_pair(inout vec2 a, inout vec2 b) {
-    vec2 mn = min(a, b);
-    b = max(a, b);
-    a = mn;
-}
-
 void main() {
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
     chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
@@ -142,33 +136,30 @@ void main() {
             } else if (texel_loc.y >= int(params.SourceSize.y) - line_step) {
                 chroma = 0.5 * (middle_chroma + upper_chroma);
             } else {
-                vec2 cand_u = 0.5 * (middle_chroma + upper_chroma);
-                vec2 cand_d = 0.5 * (middle_chroma + lower_chroma);
+                // 5-candidate median over {middle, upper, lower, (middle+upper)/2, (middle+lower)/2}
+                // Because the two averaged candidates are midpoints bounded between middle and
+                // their respective adjacent lines, the 5-element median simplifies algebraically
+                // to clamping middle_chroma within bounds determined by upper and lower chroma.
+                vec2 u_min = min(upper_chroma, lower_chroma);
+                vec2 u_max = max(upper_chroma, lower_chroma);
+                vec2 cand_min = 0.5 * (middle_chroma + u_min);
+                vec2 cand_max = 0.5 * (middle_chroma + u_max);
+                vec2 lo = min(u_min, cand_max);
+                vec2 hi = max(u_max, cand_min);
+                vec2 c_med5 = clamp(middle_chroma, lo, hi);
 
-                vec2 c0 = middle_chroma;
-                vec2 c1 = upper_chroma;
-                vec2 c2 = lower_chroma;
-                vec2 c3 = cand_u;
-                vec2 c4 = cand_d;
-
-                // Branchless 9-comparator SIMD sorting network
-                sort_pair(c0, c1);
-                sort_pair(c3, c4);
-                sort_pair(c2, c4);
-                sort_pair(c2, c3);
-                sort_pair(c0, c3);
-                sort_pair(c1, c4);
-                sort_pair(c0, c2);
-                sort_pair(c1, c3);
-                sort_pair(c1, c2);
-
-                vec2 c_med5 = c2;
-
-                // Toshiba US5548342A isolated-feature detector
-                float luma_delta_u = middle_luma - upper_luma;
-                float luma_delta_d = middle_luma - lower_luma;
-                float iso_luma = max(0.0, min(abs(luma_delta_u), abs(luma_delta_d)) * (sign(luma_delta_u) * sign(luma_delta_d)));
-                float w_iso_luma = smoothstep(0.04, 0.12, iso_luma);
+                // Toshiba US5548342A isolated-feature detector with relative luma scaling
+                // and phase-aware single-neighbor boundary gating.
+                float luma_delta_u = abs(middle_luma - upper_luma) / max(max(middle_luma, upper_luma), 0.05);
+                float luma_delta_d = abs(middle_luma - lower_luma) / max(max(middle_luma, lower_luma), 0.05);
+                float w_luma_u = smoothstep(0.04, 0.12, luma_delta_u);
+                float w_luma_d = smoothstep(0.04, 0.12, luma_delta_d);
+                float same_phase_d = step(0.0, dot(middle_chroma, lower_chroma));
+                float same_phase_u = step(0.0, dot(middle_chroma, upper_chroma));
+                float w_iso_luma = max(
+                    min(w_luma_u, w_luma_d),
+                    max(w_luma_u * same_phase_d, w_luma_d * same_phase_u)
+                );
 
                 vec2 uv_scale = vec2(1.0 / 0.436, 1.0 / 0.615);
                 float norm_m = length(middle_chroma * uv_scale);

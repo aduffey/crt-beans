@@ -255,10 +255,21 @@ class TestAnalogSimulation(unittest.TestCase):
     def test_ntsc_comb_isolated_feature_saturation(self):
         from common import RGB_TO_YUV
 
-        # Verify isolated 1-scanline feature saturation preservation:
-        # 5-candidate median with Toshiba guard maintains full chroma amplitude without attenuation or bleed.
-        iso_pattern = np.zeros((16, 64, 3), dtype=np.float32)
-        iso_pattern[8, :] = [1.0, 0.0, 0.0]  # Isolated red line
+        # Verify isolated 1-scanline feature saturation preservation and dark-line
+        # hanging-dot suppression across bright isolated lines, dark isolated lines,
+        # dark/black lines on dark colored backgrounds, and monotonic 3-line dark steps.
+        iso_pattern = np.zeros((28, 64, 3), dtype=np.float32)
+        iso_pattern[2, :] = [1.0, 0.0, 0.0]    # Bright isolated red line
+        iso_pattern[6, :] = [0.0, 0.0, 0.26]   # Dark isolated blue line (Y ≈ 0.030)
+        iso_pattern[10, :] = [0.26, 0.0, 0.0]  # Dark isolated red line (Y ≈ 0.078)
+        iso_pattern[13:21, :] = [0.0, 0.0, 0.35]
+        iso_pattern[15, :] = [0.0, 0.0, 0.0]   # Black line on dark blue background
+        iso_pattern[18, :] = [0.0, 0.0, 0.13]  # Darker blue line on dark blue background
+        iso_pattern[24, :] = [0.0, 0.0, 0.26]  # Monotonic 3-line dark step (black -> dark blue -> med blue)
+        iso_pattern[25:, :] = [0.0, 0.27, 0.54]
+
+        dark_feature_rows = [5, 6, 7, 9, 10, 11, 14, 15, 16, 17, 18, 19, 23, 24, 25]
+
         for system in ['standard', 'snes', 'genesis']:
             with self.subTest(system=system):
                 outputs = {
@@ -272,18 +283,28 @@ class TestAnalogSimulation(unittest.TestCase):
                     mode: np.dot(output, RGB_TO_YUV.T)
                     for mode, output in outputs.items()
                 }
-                amp_notch = np.linalg.norm(yuv['notch'][8, 100:800, 1:], axis=-1).mean()
-                amp_comb = np.linalg.norm(yuv['comb'][8, 100:800, 1:], axis=-1).mean()
-                amp_adapt = np.linalg.norm(yuv['adaptive'][8, 100:800, 1:], axis=-1).mean()
+                amp_notch = np.linalg.norm(yuv['notch'][2, 100:800, 1:], axis=-1).mean()
+                amp_comb = np.linalg.norm(yuv['comb'][2, 100:800, 1:], axis=-1).mean()
+                amp_adapt = np.linalg.norm(yuv['adaptive'][2, 100:800, 1:], axis=-1).mean()
 
-                bleed_comb = np.linalg.norm(yuv['comb'][[7, 9], 100:800, 1:], axis=-1).mean()
-                bleed_adapt = np.linalg.norm(yuv['adaptive'][[7, 9], 100:800, 1:], axis=-1).mean()
+                bleed_comb = np.linalg.norm(yuv['comb'][[1, 3], 100:800, 1:], axis=-1).mean()
+                bleed_adapt = np.linalg.norm(yuv['adaptive'][[1, 3], 100:800, 1:], axis=-1).mean()
 
                 # Adaptive comb preserves full saturation matching notch, while comb attenuates by ~50%
                 self.assertAlmostEqual(float(amp_adapt), float(amp_notch), places=3)
                 self.assertLess(amp_comb, amp_notch * 0.6)
                 self.assertLess(bleed_adapt, 1e-4)
                 self.assertGreater(bleed_comb, 0.01)
+
+                # Dark solid lines and monotonic dark steps must match notch without hanging-dot ripple
+                np.testing.assert_allclose(
+                    outputs['adaptive'][dark_feature_rows, 100:800],
+                    outputs['notch'][dark_feature_rows, 100:800],
+                    atol=1e-4, rtol=0,
+                )
+                ripple_comb = np.mean(np.abs(np.diff(yuv['comb'][dark_feature_rows, 100:800, 0], axis=1)))
+                ripple_adapt = np.mean(np.abs(np.diff(yuv['adaptive'][dark_feature_rows, 100:800, 0], axis=1)))
+                self.assertLess(ripple_adapt, ripple_comb * 0.1)
 
     def test_ntsc_comb_complementary_line_fallback(self):
         # Complementary colors are anti-phase too, but must retain their chroma via luma guard.
@@ -374,6 +395,56 @@ class TestAnalogSimulation(unittest.TestCase):
 
             w_right = np.array(eval_kernel(0.5, float(wc)), dtype=np.float64)
             np.testing.assert_allclose(w_right, [0.0, 0.0, 1.0, 0.0], atol=1e-6)
+
+    def test_ntsc_comb_5candidate_median_invariants(self):
+        # The 5 comb candidates {M, U, D, (M+U)/2, (M+D)/2} contain two arithmetic midpoints.
+        # Verify that the branchless bounded clamp formulation algebraically matches the exact
+        # component-wise median across random and edge-case inputs.
+        rng = np.random.default_rng(42)
+        # Test random values across multiple scales
+        for scale in [0.01, 1.0, 100.0]:
+            M = rng.uniform(-scale, scale, size=(500, 2)).astype(np.float32)
+            U = rng.uniform(-scale, scale, size=(500, 2)).astype(np.float32)
+            D = rng.uniform(-scale, scale, size=(500, 2)).astype(np.float32)
+
+            cand_u = 0.5 * (M + U)
+            cand_d = 0.5 * (M + D)
+            stack = np.stack([M, U, D, cand_u, cand_d], axis=0)  # (5, 500, 2)
+            expected_median = np.median(stack, axis=0)  # (500, 2)
+
+            u_min = np.minimum(U, D)
+            u_max = np.maximum(U, D)
+            cand_min = 0.5 * (M + u_min)
+            cand_max = 0.5 * (M + u_max)
+            lo = np.minimum(u_min, cand_max)
+            hi = np.maximum(u_max, cand_min)
+            actual_median = np.clip(M, lo, hi)
+
+            np.testing.assert_allclose(actual_median, expected_median, rtol=1e-6, atol=1e-7)
+
+        # Test specific edge cases: equal lines, collinear gradients, extremes
+        edge_cases = [
+            # All equal
+            (np.array([[0.5, -0.5]]), np.array([[0.5, -0.5]]), np.array([[0.5, -0.5]])),
+            # M between U and D
+            (np.array([[0.0, 0.0]]), np.array([[-1.0, 2.0]]), np.array([[1.0, -2.0]])),
+            # M outside [min(U, D), max(U, D)]
+            (np.array([[5.0, -5.0]]), np.array([[1.0, 2.0]]), np.array([[2.0, 1.0]])),
+            # U == D != M
+            (np.array([[1.0, 1.0]]), np.array([[0.0, 0.0]]), np.array([[0.0, 0.0]])),
+        ]
+        for M, U, D in edge_cases:
+            cand_u = 0.5 * (M + U)
+            cand_d = 0.5 * (M + D)
+            expected = np.median(np.stack([M, U, D, cand_u, cand_d], axis=0), axis=0)
+            u_min = np.minimum(U, D)
+            u_max = np.maximum(U, D)
+            cand_min = 0.5 * (M + u_min)
+            cand_max = 0.5 * (M + u_max)
+            lo = np.minimum(u_min, cand_max)
+            hi = np.maximum(u_max, cand_min)
+            actual = np.clip(M, lo, hi)
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-7)
 
     def test_ntsc_chroma_lpf_carrier_nulls(self):
         # Carrier-locked Hann window of half-width W = 1.5 * samples / periods_per_active_line
