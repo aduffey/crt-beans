@@ -125,7 +125,7 @@ This parameter controls how the decoder separates brightness (Y) from color (C):
 
 - **Notch (0.0):** A simple notch filter as found on early TVs. This is the blurriest option.
 - **Comb (1.0):** A simple 3-line comb filter as found on high end TVs in the 80's, and common in the 90's. This is a sharper option but causes artifacts on horizontal edges (on some consoles more than others).
-- **Adaptive comb (2.0, default):** A 2D adaptive comb filter as found on TVs in the late 90's into the 2000's. This should avoid most of the artifacts of the 3-line comb but might not be as sharp.
+- **Adaptive comb (2.0, default):** A 2D adaptive comb filter as found on TVs in the late 90's into the 2000's. This should avoid most of the artifacts of the 3-line comb but might not be as sharp. Separate luma protection reduces dots on isolated horizontal details, though some vertical color bleed can remain.
 
 In bob and weave modes on interlaced input, comb filtering uses neighboring scanlines from the same field.
 

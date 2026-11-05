@@ -7,11 +7,16 @@ from common import texelFetch, gamma_to_yuv, yuv_to_linear, gamma_to_linear
 
 CHROMA_SUBCARRIER = (315.0 / 88.0) * 1e6
 ACTIVE_LINE_TIME = 52.5e-6
-# Absolute low-pass luma and peak-normalized chroma extrema, matching Slang.
+# Displayed-chroma guards: absolute low-pass Y and peak-normalized UV extrema.
 NTSC_COMB_LUMA_LOW = 0.0
 NTSC_COMB_LUMA_HIGH = 0.20
 NTSC_COMB_CHROMA_LOW = 0.0
 NTSC_COMB_CHROMA_HIGH = 1.50
+# Independent luma-subtraction guards, matching the Slang baseband adaptation.
+NTSC_COMB_PROTECT_LOW = 0.04
+NTSC_COMB_PROTECT_HIGH = 0.12
+NTSC_COMB_LUMA_FLOOR = 0.05
+NTSC_COMB_CHROMA_RATIO = 1.5
 
 
 @dataclass(frozen=True)
@@ -393,6 +398,7 @@ def taichi_ntsc_decode_comb(
         middle_chroma = tm.vec2(middle.y, middle.z)
         middle_luma = middle.w
         chroma = middle_chroma
+        chroma_for_luma = chroma
 
         if filter_type > 0.5:
             offset = (227.5 - periods_per_line) / periods_per_active_line
@@ -422,16 +428,21 @@ def taichi_ntsc_decode_comb(
                 # 3-line comb with boundary handling
                 if y < line_step:
                     chroma = 0.5 * middle_chroma + 0.5 * lower_chroma
+                    chroma_for_luma = chroma
                 elif y >= height - line_step:
                     chroma = 0.5 * middle_chroma + 0.5 * upper_chroma
+                    chroma_for_luma = chroma
                 else:
                     chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma
+                    chroma_for_luma = chroma
             else:
                 # 5-candidate median comb with Toshiba isolated-feature guard
                 if y < line_step:
                     chroma = 0.5 * (middle_chroma + lower_chroma)
+                    chroma_for_luma = chroma
                 elif y >= height - line_step:
                     chroma = 0.5 * (middle_chroma + upper_chroma)
+                    chroma_for_luma = chroma
                 else:
                     # 5-candidate median over {middle, upper, lower, (middle+upper)/2, (middle+lower)/2}
                     # Because the two averaged candidates are midpoints bounded between middle and
@@ -451,7 +462,8 @@ def taichi_ntsc_decode_comb(
                     iso_luma = tm.max(0.0, tm.min(ti.abs(luma_delta_u), ti.abs(luma_delta_d)) * (tm.sign(luma_delta_u) * tm.sign(luma_delta_d)))
                     w_iso_luma = tm.smoothstep(NTSC_COMB_LUMA_LOW, NTSC_COMB_LUMA_HIGH, iso_luma)
 
-                    # Toshiba JPH0865706A / JP3351630B2 isolated-feature detector (chroma)
+                    # Baseband approximation of the signed carrier-band extrema
+                    # detector in Toshiba JPH0865706A / JP3351630B2.
                     chroma_delta_u = middle_chroma - upper_chroma
                     chroma_delta_d = middle_chroma - lower_chroma
                     uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
@@ -463,8 +475,29 @@ def taichi_ntsc_decode_comb(
                     w_iso = tm.max(w_iso_luma, w_iso_chroma)
                     chroma = tm.mix(c_med5, middle_chroma, w_iso)
 
+                    # Protect carrier cancellation independently of displayed UV,
+                    # following Toshiba's separate C/CC paths (US5548342A).
+                    # Relative Y and chroma-amplitude excess are our baseband
+                    # adaptation: dark isolated lines need stronger protection.
+                    y_sub_scale = tm.max(
+                        tm.max(ti.abs(middle_luma), ti.abs(upper_luma)),
+                        tm.max(ti.abs(lower_luma), NTSC_COMB_LUMA_FLOOR),
+                    )
+                    y_sub_iso_y = iso_luma / y_sub_scale
+                    y_sub_norm_m = tm.length(middle_chroma * uv_scale)
+                    y_sub_norm_u = tm.length(upper_chroma * uv_scale)
+                    y_sub_norm_d = tm.length(lower_chroma * uv_scale)
+                    y_sub_iso_c = tm.max(
+                        0.0, y_sub_norm_m - NTSC_COMB_CHROMA_RATIO * tm.max(y_sub_norm_u, y_sub_norm_d),
+                    )
+                    y_sub_weight = tm.max(
+                        tm.smoothstep(NTSC_COMB_PROTECT_LOW, NTSC_COMB_PROTECT_HIGH, y_sub_iso_y),
+                        tm.smoothstep(NTSC_COMB_PROTECT_LOW, NTSC_COMB_PROTECT_HIGH, y_sub_iso_c),
+                    )
+                    chroma_for_luma = tm.mix(c_med5, middle_chroma, y_sub_weight)
+
         carrier = chroma_carrier(u, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
-        luma = composite - chroma.x * tm.sin(carrier) - chroma.y * tm.cos(carrier)
+        luma = composite - chroma_for_luma.x * tm.sin(carrier) - chroma_for_luma.y * tm.cos(carrier)
         field_out[y, x] = yuv_to_linear_taichi(tm.vec3(luma, chroma.x, chroma.y), gamma)
 
 

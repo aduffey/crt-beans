@@ -65,12 +65,18 @@ class TestSimulationConfig(unittest.TestCase):
 
 
 class TestAnalogSimulation(unittest.TestCase):
+    _comb_row_fields = {}
+
     def setUp(self):
         # Create synthetic test image
         np.random.seed(42)
         self.img = np.random.uniform(0.1, 0.9, (24, 32, 3)).astype(np.float32)
 
-    def _decode_comb_rows(self, cases):
+    def _decode_comb_rows(
+        self, cases, *, filter_type=2.0, frame_count=0, interlaced=False,
+        odd_field_first=True, field_parity=0, periods_per_line=227.5,
+        modulate_chroma=False, return_all_rows=False,
+    ):
         # Exercise the real decoder with supplied post-LPF (low Y, U, V) rows.
         # Triples are independent at their center row; aligned timing avoids
         # conflating the guard with the fractional-line interpolator.
@@ -78,17 +84,40 @@ class TestAnalogSimulation(unittest.TestCase):
         from common import RGB_TO_YUV
 
         rows = np.asarray(cases, dtype=np.float32).reshape(-1, 3)
+        line_step = 2 if interlaced else 1
+        center_rows = np.arange(1, len(rows), 3) * line_step + field_parity
+        rows = np.repeat(rows, line_step, axis=0)
         samples = 32
         source = np.full((len(rows), samples, 4), 0.5, dtype=np.float32)
         source[..., 1:3] = rows[:, None, 1:3]
         source[..., 3] = rows[:, None, 0]
-        field_in = ti.Vector.field(4, dtype=float, shape=source.shape[:2])
+        if modulate_chroma:
+            # Supply a known constant Y with the original center carrier, so
+            # perfect cancellation recovers 0.5 independently of displayed UV.
+            for y in range(len(rows)):
+                for x in range(samples):
+                    phase = filtering.eval_chroma_carrier(
+                        (x + 0.5) / samples, y, frame_count,
+                        4.0, periods_per_line, 0.5, interlaced, odd_field_first,
+                    )
+                    source[y, x, 0] += rows[y, 1] * np.sin(phase) + rows[y, 2] * np.cos(phase)
+        # Reuse fields across cases/phases: Taichi retains field trees and
+        # compiled specializations for the lifetime of the full test suite.
+        shape = source.shape[:2]
+        if shape not in self._comb_row_fields:
+            self._comb_row_fields[shape] = (
+                ti.Vector.field(4, dtype=float, shape=shape),
+                ti.Vector.field(3, dtype=float, shape=shape),
+            )
+        field_in, field_out = self._comb_row_fields[shape]
         field_in.from_numpy(source)
-        field_out = ti.Vector.field(3, dtype=float, shape=source.shape[:2])
         filtering.taichi_ntsc_decode_comb(
-            field_in, field_out, 2.0, 0, 4.0, 227.5, 0.5, 1.0, 0, 1,
+            field_in, field_out, filter_type, frame_count, 4.0,
+            periods_per_line, 0.5, 1.0, int(interlaced), int(odd_field_first),
         )
-        result = field_out.to_numpy()[1::3]
+        result = field_out.to_numpy()
+        if not return_all_rows:
+            result = result[center_rows]
         self.assertTrue(np.all(np.isfinite(result)))
         self.assertTrue(np.all((result >= 0.0) & (result <= 1.0)))
         return result @ RGB_TO_YUV.T
@@ -146,6 +175,109 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertTrue(np.all(output[1] > medians[1]))
         self.assertTrue(np.all(output[1] < center))
         np.testing.assert_allclose(output[2], center, atol=1e-6, rtol=0)
+
+    def test_ntsc_comb_separate_luma_protection(self):
+        # A dark line between equal colored neighbors must cancel its own
+        # carrier without also removing the median's surrounding-color bleed.
+        case = [[[0.15, 0.06, 0.02], [0.10, 0.0, 0.0], [0.15, 0.06, 0.02]]]
+        for interlaced in [False, True]:
+            for frame_count in [0, 1]:
+                for field_parity in range(2 if interlaced else 1):
+                    with self.subTest(interlaced=interlaced, frame=frame_count, field=field_parity):
+                        output = self._decode_comb_rows(
+                            case, frame_count=frame_count, interlaced=interlaced,
+                            odd_field_first=False, field_parity=field_parity,
+                        )
+                        np.testing.assert_allclose(output[..., 0], 0.5, atol=2e-6, rtol=0)
+                        np.testing.assert_allclose(
+                            output[..., 1:],
+                            np.broadcast_to([0.0253125, 0.0084375], output[..., 1:].shape),
+                            atol=2e-6, rtol=0,
+                        )
+
+    def test_ntsc_comb_relative_luma_protection_is_signed(self):
+        # Both extrema protect low-amplitude features. The same contrast on
+        # a monotonic ramp must still use combed chroma for Y subtraction.
+        output = self._decode_comb_rows([
+            [[0.15, 0.06, 0.02], [0.10, 0.0, 0.0], [0.15, 0.06, 0.02]],
+            [[0.10, 0.06, 0.02], [0.15, 0.0, 0.0], [0.10, 0.06, 0.02]],
+            [[0.10, 0.06, 0.02], [0.15, 0.0, 0.0], [0.20, 0.06, 0.02]],
+        ])
+        np.testing.assert_allclose(output[:2, :, 0], 0.5, atol=2e-6, rtol=0)
+        np.testing.assert_allclose(output[0, :, 1:], output[1, :, 1:], atol=2e-6, rtol=0)
+        self.assertGreater(np.std(output[2, :, 0]), 0.015)
+
+    def test_ntsc_comb_amplitude_only_luma_protection(self):
+        # With flat low-pass Y, an isolated color can still require full
+        # carrier cancellation. Its displayed UV remains median-filtered.
+        cases = []
+        colors = []
+        for channel, amplitude in [(1, 0.08), (2, 0.12)]:
+            for sign in [-1.0, 1.0]:
+                center = np.array([0.1, 0.0, 0.0])
+                center[channel] = sign * amplitude
+                cases.append([[0.1, 0.0, 0.0], center, [0.1, 0.0, 0.0]])
+                colors.append(center[1:])
+        output = self._decode_comb_rows(cases, modulate_chroma=True)
+        np.testing.assert_allclose(output[..., 0], 0.5, atol=2e-6, rtol=0)
+        retained = np.linalg.norm(output[..., 1:], axis=-1).mean(axis=1)
+        retention = retained / np.linalg.norm(colors, axis=-1)
+        self.assertTrue(np.all((retention > 0.45) & (retention < 0.65)))
+
+    def test_ntsc_comb_luma_protection_continuity(self):
+        # Cross the old dot-product gate, a signed-Y zero crossing, the
+        # relative-Y denominator floor, and the chroma-amplitude transition
+        # with finite median differences.
+        witnesses = [
+            (
+                [[0.30, -0.04, -0.02], [0.45, 0.08, 0.06], [0.45, 0.06, -0.08]],
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.8, 0.6]],
+                1e-3,
+            ),
+            (
+                [[0.10, 0.06, 0.02], [0.10, 0.0, 0.0], [0.05, 0.06, 0.02]],
+                [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                1e-2,
+            ),
+            (
+                [[0.05, 0.06, 0.02], [0.047, 0.0, 0.0], [0.05, 0.06, 0.02]],
+                [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                1e-3,
+            ),
+            (
+                [[0.10, 0.0436, 0.0], [0.10, 0.08284, 0.0], [0.10, 0.0436, 0.0]],
+                [[0.0, 0.0, 0.0], [0.0, 0.436, 0.0], [0.0, 0.0, 0.0]],
+                1e-3,
+            ),
+        ]
+        for case, direction, coarse_epsilon in witnesses:
+            cases = [np.asarray(case) + sign * epsilon * np.asarray(direction)
+                     for epsilon in [coarse_epsilon, 1e-6] for sign in [-1.0, 1.0]]
+            # Integer line timing gives every case the same carrier phase;
+            # discard the fractional-line interpolator's edge transients.
+            output = self._decode_comb_rows(cases, periods_per_line=228.0)[:, 8:-8]
+            large_jump = np.max(np.abs(output[1] - output[0]))
+            small_jump = np.max(np.abs(output[3] - output[2]))
+            self.assertGreater(large_jump, 1e-5)
+            self.assertLess(small_jump, 1e-4)
+            self.assertLess(small_jump, large_jump * 0.02)
+
+    def test_ntsc_comb_luma_protection_keeps_fixed_modes_and_boundaries(self):
+        case = [[[0.15, 0.06, 0.02], [0.10, 0.0, 0.0], [0.15, 0.06, 0.02]]]
+        notch = self._decode_comb_rows(case, filter_type=0.0)
+        comb = self._decode_comb_rows(case, filter_type=1.0)
+        np.testing.assert_allclose(notch, [[[0.5, 0.0, 0.0]] * 32], atol=2e-6, rtol=0)
+        np.testing.assert_allclose(comb[..., 1:],
+                                   np.broadcast_to([0.03, 0.01], comb[..., 1:].shape),
+                                   atol=2e-6, rtol=0)
+        self.assertGreater(np.std(comb[..., 0]), 0.015)
+        for interlaced in [False, True]:
+            adaptive = self._decode_comb_rows(case, interlaced=interlaced, return_all_rows=True)
+            comb = self._decode_comb_rows(case, filter_type=1.0,
+                                          interlaced=interlaced, return_all_rows=True)
+            step = 2 if interlaced else 1
+            np.testing.assert_allclose(adaptive[:step], comb[:step], atol=2e-6, rtol=0)
+            np.testing.assert_allclose(adaptive[-step:], comb[-step:], atol=2e-6, rtol=0)
 
     def test_linearize(self):
         out_direct = filtering.simulate_linearize(self.img, gamma=2.4)

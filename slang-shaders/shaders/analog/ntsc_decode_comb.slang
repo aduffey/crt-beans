@@ -21,13 +21,17 @@ layout(push_constant) uniform Push {
 #include "parameters_ntsc.inc"
 #include "chroma_carrier.inc"
 
-// Fitted across console screenshots using single-frame and linear-averaged
-// display error. Chroma extrema also detect cross-color, so their transition
-// must be much broader than the low-pass luma transition.
+// Displayed-chroma guards fitted across console screenshots. Chroma extrema
+// also detect cross-color, so their transition is broader than low-pass Y's.
 const float NTSC_COMB_LUMA_LOW = 0.0;
 const float NTSC_COMB_LUMA_HIGH = 0.2;
 const float NTSC_COMB_CHROMA_LOW = 0.0;
 const float NTSC_COMB_CHROMA_HIGH = 1.5;
+// Independent luma-subtraction guards, matching the Python baseband adaptation.
+const float NTSC_COMB_PROTECT_LOW = 0.04;
+const float NTSC_COMB_PROTECT_HIGH = 0.12;
+const float NTSC_COMB_LUMA_FLOOR = 0.05;
+const float NTSC_COMB_CHROMA_RATIO = 1.5;
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -97,6 +101,7 @@ void main() {
     vec2 middle_chroma = middle.gb;
     float middle_luma = middle.a;
     vec2 chroma = middle_chroma;
+    vec2 chroma_for_luma = middle_chroma;
 
     if (params.FilterType > 0.5) {
         // If we're comb filtering
@@ -132,17 +137,22 @@ void main() {
             // Unconditional 3-line comb with boundary handling
             if (texel_loc.y < line_step) {
                 chroma = 0.5 * middle_chroma + 0.5 * lower_chroma;
+                chroma_for_luma = chroma;
             } else if (texel_loc.y >= int(params.SourceSize.y) - line_step) {
                 chroma = 0.5 * middle_chroma + 0.5 * upper_chroma;
+                chroma_for_luma = chroma;
             } else {
                 chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma;
+                chroma_for_luma = chroma;
             }
         } else {
             // 5-candidate median comb with Toshiba isolated-feature guard
             if (texel_loc.y < line_step) {
                 chroma = 0.5 * (middle_chroma + lower_chroma);
+                chroma_for_luma = chroma;
             } else if (texel_loc.y >= int(params.SourceSize.y) - line_step) {
                 chroma = 0.5 * (middle_chroma + upper_chroma);
+                chroma_for_luma = chroma;
             } else {
                 // 5-candidate median over {middle, upper, lower, (middle+upper)/2, (middle+lower)/2}
                 // Because the two averaged candidates are midpoints bounded between middle and
@@ -162,7 +172,8 @@ void main() {
                 float iso_luma = max(0.0, min(abs(luma_delta_u), abs(luma_delta_d)) * (sign(luma_delta_u) * sign(luma_delta_d)));
                 float w_iso_luma = smoothstep(NTSC_COMB_LUMA_LOW, NTSC_COMB_LUMA_HIGH, iso_luma);
 
-                // Toshiba JPH0865706A / JP3351630B2 isolated-feature detector (chroma)
+                // Baseband approximation of the signed carrier-band extrema
+                // detector in Toshiba JPH0865706A / JP3351630B2.
                 vec2 chroma_delta_u = middle_chroma - upper_chroma;
                 vec2 chroma_delta_d = middle_chroma - lower_chroma;
                 const vec2 uv_scale = vec2(1.0 / 0.436, 1.0 / 0.615);
@@ -173,13 +184,29 @@ void main() {
 
                 float w_iso = max(w_iso_luma, w_iso_chroma);
                 chroma = mix(c_med5, middle_chroma, w_iso);
+
+                // Protect carrier cancellation independently of displayed UV,
+                // following Toshiba's separate C/CC paths (US5548342A).
+                // Relative Y and chroma-amplitude excess are our baseband
+                // adaptation: dark isolated lines need stronger protection.
+                float y_sub_scale = max(max(abs(middle_luma), abs(upper_luma)),
+                    max(abs(lower_luma), NTSC_COMB_LUMA_FLOOR));
+                float y_sub_iso_y = iso_luma / y_sub_scale;
+                float y_sub_norm_m = length(middle_chroma * uv_scale);
+                float y_sub_norm_u = length(upper_chroma * uv_scale);
+                float y_sub_norm_d = length(lower_chroma * uv_scale);
+                float y_sub_iso_c = max(0.0,
+                    y_sub_norm_m - NTSC_COMB_CHROMA_RATIO * max(y_sub_norm_u, y_sub_norm_d));
+                float y_sub_weight = max(smoothstep(NTSC_COMB_PROTECT_LOW, NTSC_COMB_PROTECT_HIGH, y_sub_iso_y),
+                    smoothstep(NTSC_COMB_PROTECT_LOW, NTSC_COMB_PROTECT_HIGH, y_sub_iso_c));
+                chroma_for_luma = mix(c_med5, middle_chroma, y_sub_weight);
             }
         }
     }
 
-    // Remodulate chroma and subtract from composite to recover luma
+    // Cancel the carrier with protected chroma; display UV keeps its combing.
     float carrier = chroma_carrier(vTexCoord.x, float(texel_loc.y), params.FrameCount, ci, interlaced, params.OddFieldFirst);
-    float luma = composite - chroma.r * sin(carrier) - chroma.g * cos(carrier);
+    float luma = composite - chroma_for_luma.r * sin(carrier) - chroma_for_luma.g * cos(carrier);
 
     FragColor.rgb = yuv_to_linear(vec3(luma, chroma.r, chroma.g));
 }
