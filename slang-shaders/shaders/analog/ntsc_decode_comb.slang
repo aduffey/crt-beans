@@ -21,6 +21,14 @@ layout(push_constant) uniform Push {
 #include "parameters_ntsc.inc"
 #include "chroma_carrier.inc"
 
+// Fitted across console screenshots using single-frame and linear-averaged
+// display error. Chroma extrema also detect cross-color, so their transition
+// must be much broader than the low-pass luma transition.
+const float NTSC_COMB_LUMA_LOW = 0.0;
+const float NTSC_COMB_LUMA_HIGH = 0.2;
+const float NTSC_COMB_CHROMA_LOW = 0.0;
+const float NTSC_COMB_CHROMA_HIGH = 1.5;
+
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
 layout(location = 1) in vec2 TexCoord;
@@ -148,25 +156,20 @@ void main() {
                 vec2 hi = max(u_max, cand_min);
                 vec2 c_med5 = clamp(middle_chroma, lo, hi);
 
-                // Toshiba US5548342A isolated-feature detector with relative luma scaling
-                // and phase-aware single-neighbor boundary gating.
-                float luma_delta_u = abs(middle_luma - upper_luma) / max(max(middle_luma, upper_luma), 0.05);
-                float luma_delta_d = abs(middle_luma - lower_luma) / max(max(middle_luma, lower_luma), 0.05);
-                float w_luma_u = smoothstep(0.04, 0.12, luma_delta_u);
-                float w_luma_d = smoothstep(0.04, 0.12, luma_delta_d);
-                float same_phase_d = step(0.0, dot(middle_chroma, lower_chroma));
-                float same_phase_u = step(0.0, dot(middle_chroma, upper_chroma));
-                float w_iso_luma = max(
-                    min(w_luma_u, w_luma_d),
-                    max(w_luma_u * same_phase_d, w_luma_d * same_phase_u)
-                );
+                // Toshiba US5548342A isolated-feature detector (luma)
+                float luma_delta_u = middle_luma - upper_luma;
+                float luma_delta_d = middle_luma - lower_luma;
+                float iso_luma = max(0.0, min(abs(luma_delta_u), abs(luma_delta_d)) * (sign(luma_delta_u) * sign(luma_delta_d)));
+                float w_iso_luma = smoothstep(NTSC_COMB_LUMA_LOW, NTSC_COMB_LUMA_HIGH, iso_luma);
 
-                vec2 uv_scale = vec2(1.0 / 0.436, 1.0 / 0.615);
-                float norm_m = length(middle_chroma * uv_scale);
-                float norm_u = length(upper_chroma * uv_scale);
-                float norm_d = length(lower_chroma * uv_scale);
-                float iso_chroma = max(0.0, norm_m - 1.5 * max(norm_u, norm_d));
-                float w_iso_chroma = smoothstep(0.04, 0.12, iso_chroma);
+                // Toshiba JPH0865706A / JP3351630B2 isolated-feature detector (chroma)
+                vec2 chroma_delta_u = middle_chroma - upper_chroma;
+                vec2 chroma_delta_d = middle_chroma - lower_chroma;
+                const vec2 uv_scale = vec2(1.0 / 0.436, 1.0 / 0.615);
+                chroma_delta_u *= uv_scale;
+                chroma_delta_d *= uv_scale;
+                vec2 iso_chroma = max(vec2(0.0), min(abs(chroma_delta_u), abs(chroma_delta_d)) * (sign(chroma_delta_u) * sign(chroma_delta_d)));
+                float w_iso_chroma = smoothstep(NTSC_COMB_CHROMA_LOW, NTSC_COMB_CHROMA_HIGH, max(iso_chroma.r, iso_chroma.g));
 
                 float w_iso = max(w_iso_luma, w_iso_chroma);
                 chroma = mix(c_med5, middle_chroma, w_iso);

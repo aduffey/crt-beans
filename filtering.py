@@ -7,6 +7,11 @@ from common import texelFetch, gamma_to_yuv, yuv_to_linear, gamma_to_linear
 
 CHROMA_SUBCARRIER = (315.0 / 88.0) * 1e6
 ACTIVE_LINE_TIME = 52.5e-6
+# Absolute low-pass luma and peak-normalized chroma extrema, matching Slang.
+NTSC_COMB_LUMA_LOW = 0.0
+NTSC_COMB_LUMA_HIGH = 0.20
+NTSC_COMB_CHROMA_LOW = 0.0
+NTSC_COMB_CHROMA_HIGH = 1.50
 
 
 @dataclass(frozen=True)
@@ -440,25 +445,20 @@ def taichi_ntsc_decode_comb(
                     hi = tm.max(u_max, cand_min)
                     c_med5 = tm.clamp(middle_chroma, lo, hi)
 
-                    # Toshiba US5548342A isolated-feature detector with relative luma scaling
-                    # and phase-aware single-neighbor boundary gating.
-                    luma_delta_u = ti.abs(middle_luma - upper_luma) / tm.max(tm.max(middle_luma, upper_luma), 0.05)
-                    luma_delta_d = ti.abs(middle_luma - lower_luma) / tm.max(tm.max(middle_luma, lower_luma), 0.05)
-                    w_luma_u = tm.smoothstep(0.04, 0.12, luma_delta_u)
-                    w_luma_d = tm.smoothstep(0.04, 0.12, luma_delta_d)
-                    same_phase_d = tm.step(0.0, tm.dot(middle_chroma, lower_chroma))
-                    same_phase_u = tm.step(0.0, tm.dot(middle_chroma, upper_chroma))
-                    w_iso_luma = tm.max(
-                        tm.min(w_luma_u, w_luma_d),
-                        tm.max(w_luma_u * same_phase_d, w_luma_d * same_phase_u),
-                    )
+                    # Toshiba US5548342A isolated-feature detector (luma)
+                    luma_delta_u = middle_luma - upper_luma
+                    luma_delta_d = middle_luma - lower_luma
+                    iso_luma = tm.max(0.0, tm.min(ti.abs(luma_delta_u), ti.abs(luma_delta_d)) * (tm.sign(luma_delta_u) * tm.sign(luma_delta_d)))
+                    w_iso_luma = tm.smoothstep(NTSC_COMB_LUMA_LOW, NTSC_COMB_LUMA_HIGH, iso_luma)
 
+                    # Toshiba JPH0865706A / JP3351630B2 isolated-feature detector (chroma)
+                    chroma_delta_u = middle_chroma - upper_chroma
+                    chroma_delta_d = middle_chroma - lower_chroma
                     uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
-                    norm_m = tm.length(middle_chroma * uv_scale)
-                    norm_u = tm.length(upper_chroma * uv_scale)
-                    norm_d = tm.length(lower_chroma * uv_scale)
-                    iso_chroma = tm.max(0.0, norm_m - 1.5 * tm.max(norm_u, norm_d))
-                    w_iso_chroma = tm.smoothstep(0.04, 0.12, iso_chroma)
+                    chroma_delta_u *= uv_scale
+                    chroma_delta_d *= uv_scale
+                    iso_chroma = tm.max(tm.vec2(0.0), tm.min(ti.abs(chroma_delta_u), ti.abs(chroma_delta_d)) * (tm.sign(chroma_delta_u) * tm.sign(chroma_delta_d)))
+                    w_iso_chroma = tm.smoothstep(NTSC_COMB_CHROMA_LOW, NTSC_COMB_CHROMA_HIGH, tm.max(iso_chroma.x, iso_chroma.y))
 
                     w_iso = tm.max(w_iso_luma, w_iso_chroma)
                     chroma = tm.mix(c_med5, middle_chroma, w_iso)

@@ -70,6 +70,83 @@ class TestAnalogSimulation(unittest.TestCase):
         np.random.seed(42)
         self.img = np.random.uniform(0.1, 0.9, (24, 32, 3)).astype(np.float32)
 
+    def _decode_comb_rows(self, cases):
+        # Exercise the real decoder with supplied post-LPF (low Y, U, V) rows.
+        # Triples are independent at their center row; aligned timing avoids
+        # conflating the guard with the fractional-line interpolator.
+        import taichi as ti
+        from common import RGB_TO_YUV
+
+        rows = np.asarray(cases, dtype=np.float32).reshape(-1, 3)
+        samples = 32
+        source = np.full((len(rows), samples, 4), 0.5, dtype=np.float32)
+        source[..., 1:3] = rows[:, None, 1:3]
+        source[..., 3] = rows[:, None, 0]
+        field_in = ti.Vector.field(4, dtype=float, shape=source.shape[:2])
+        field_in.from_numpy(source)
+        field_out = ti.Vector.field(3, dtype=float, shape=source.shape[:2])
+        filtering.taichi_ntsc_decode_comb(
+            field_in, field_out, 2.0, 0, 4.0, 227.5, 0.5, 1.0, 0, 1,
+        )
+        result = field_out.to_numpy()[1::3]
+        self.assertTrue(np.all(np.isfinite(result)))
+        self.assertTrue(np.all((result >= 0.0) & (result <= 1.0)))
+        return result @ RGB_TO_YUV.T
+
+    def test_ntsc_comb_signed_luma_guard(self):
+        # A local maximum and a local minimum both preserve the center's
+        # small chroma. The same luma contrast in a monotonic ramp is not
+        # an isolated feature, so that center is still median-filtered.
+        delta = filtering.NTSC_COMB_LUMA_HIGH + 0.01
+        chroma = 0.01
+        output = self._decode_comb_rows([
+            [[0.5 - delta, 0.0, 0.0], [0.5, chroma, 0.0], [0.5 - delta, 0.0, 0.0]],
+            [[0.5 + delta, 0.0, 0.0], [0.5, chroma, 0.0], [0.5 + delta, 0.0, 0.0]],
+            [[0.5 - delta, 0.0, 0.0], [0.5, chroma, 0.0], [0.5 + delta, 0.0, 0.0]],
+            [[0.5, 0.0, 0.0], [0.5, chroma, 0.0], [0.5, 0.0, 0.0]],
+        ])
+        np.testing.assert_allclose(output[:2, :, 1], chroma, atol=1e-6, rtol=0)
+        np.testing.assert_allclose(output[2, :, 1:], output[3, :, 1:], atol=1e-6, rtol=0)
+        self.assertTrue(np.all(output[2, :, 1] < chroma))
+        np.testing.assert_allclose(output[..., 2], 0.0, atol=1e-6, rtol=0)
+
+    def test_ntsc_comb_signed_chroma_guard(self):
+        # Either chroma component can identify positive or negative isolated
+        # features without requiring the largest chroma vector magnitude.
+        # Unequal U/V units are accounted for before comparing thresholds.
+        contrast = filtering.NTSC_COMB_CHROMA_HIGH + 0.01
+        cases = []
+        expected = []
+        for channel, scale in [(1, 0.436), (2, 0.615)]:
+            for sign in [-1.0, 1.0]:
+                center = np.array([0.5, 0.0, 0.0])
+                center[channel] = sign * 0.01
+                neighbor = center.copy()
+                neighbor[channel] -= sign * contrast * scale
+                cases.append([neighbor, center, neighbor])
+                expected.append(center[1:])
+        output = self._decode_comb_rows(cases)
+        expected = np.broadcast_to(np.asarray(expected)[:, None, :], output[..., 1:].shape)
+        np.testing.assert_allclose(output[..., 1:], expected, atol=1e-6, rtol=0)
+
+    def test_ntsc_comb_chroma_guard_transition(self):
+        # Below the guard range an isolated chroma feature is median-filtered;
+        # through the range it moves continuously toward the unfiltered center.
+        low = filtering.NTSC_COMB_CHROMA_LOW
+        high = filtering.NTSC_COMB_CHROMA_HIGH
+        contrasts = [0.5 * low, 0.5 * (low + high), high + 0.01]
+        center = 0.01
+        cases = []
+        for contrast in contrasts:
+            neighbor = center - contrast * 0.436
+            cases.append([[0.5, neighbor, 0.0], [0.5, center, 0.0], [0.5, neighbor, 0.0]])
+        output = self._decode_comb_rows(cases)[..., 1]
+        medians = center - 0.5 * np.asarray(contrasts) * 0.436
+        np.testing.assert_allclose(output[0], medians[0], atol=1e-6, rtol=0)
+        self.assertTrue(np.all(output[1] > medians[1]))
+        self.assertTrue(np.all(output[1] < center))
+        np.testing.assert_allclose(output[2], center, atol=1e-6, rtol=0)
+
     def test_linearize(self):
         out_direct = filtering.simulate_linearize(self.img, gamma=2.4)
         self.assertEqual(out_direct.shape, self.img.shape)
@@ -151,7 +228,10 @@ class TestAnalogSimulation(unittest.TestCase):
         from common import RGB_TO_YUV
 
         # Sample above carrier Nyquist; compare full and low contrast bars.
-        for contrast in [1.0, 0.1]:
+        # A per-component isolated-chroma guard cannot distinguish all
+        # anti-phase cross-color from real alternating chroma. The tuned
+        # guard rejects low-contrast artifacts much more strongly.
+        for contrast, max_notch_fraction in [(1.0, 0.75), (0.1, 0.02)]:
             with self.subTest(contrast=contrast):
                 pattern = np.zeros((16, 256, 3), dtype=np.float32)
                 pattern[:, ::2] = contrast
@@ -168,14 +248,11 @@ class TestAnalogSimulation(unittest.TestCase):
                     for mode, output in outputs.items()
                 }
                 self.assertLess(errors['comb'], errors['notch'] * 0.5)
-                self.assertLess(errors['adaptive'], errors['notch'] * 0.5)
-                np.testing.assert_allclose(
-                    outputs['adaptive'][2:-2, 100:800],
-                    outputs['comb'][2:-2, 100:800], atol=1e-5, rtol=0,
-                )
+                self.assertLess(errors['adaptive'], errors['notch'] * max_notch_fraction)
 
-        # Verify directional combing on a 2-scanline-tall striped bar:
-        # suppresses cross-color on both boundary scanlines without bleeding outside.
+        # Median combing reduces cross-color on a 2-scanline-tall striped
+        # bar without bleeding outside. The chroma guard leaves some
+        # residual cross-color on its two boundary scanlines.
         bar_pattern = np.full((16, 256, 3), 0.25, dtype=np.float32)
         bar_pattern[7:9, ::2] = 1.0
         bar_outputs = {
@@ -196,7 +273,7 @@ class TestAnalogSimulation(unittest.TestCase):
         bleed_adaptive = np.linalg.norm(
             (bar_outputs['adaptive'] @ RGB_TO_YUV.T)[[6, 9], 100:800, 1:], axis=-1,
         ).mean()
-        self.assertLess(bar_errors['adaptive'], bar_errors['comb'] * 0.1)
+        self.assertLess(bar_errors['adaptive'], bar_errors['comb'] * 0.65)
         self.assertGreater(bleed_comb, 0.01)
         self.assertLess(bleed_adaptive, 1e-3)
 
@@ -219,7 +296,7 @@ class TestAnalogSimulation(unittest.TestCase):
         ripple_comb = np.mean(np.abs(np.diff(yuv_comb[7:9, :, 0], axis=1)))
         ripple_adapt = np.mean(np.abs(np.diff(yuv_adapt[7:9, :, 0], axis=1)))
 
-        # Adaptive directional comb must significantly reduce hanging dots compared to 3-line comb
+        # Adaptive median comb reduces hanging dots compared to 3-line comb.
         self.assertLess(ripple_adapt, ripple_comb)
 
     def test_ntsc_comb_isolated_line_fallback(self):
@@ -252,12 +329,13 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertGreater(ripple_comb_adj, 0.2)
         self.assertLess(ripple_adapt_adj, 0.01)
 
-    def test_ntsc_comb_isolated_feature_saturation(self):
+    def test_ntsc_comb_isolated_feature_tradeoffs(self):
         from common import RGB_TO_YUV
 
-        # Verify isolated 1-scanline feature saturation preservation and dark-line
-        # hanging-dot suppression across bright isolated lines, dark isolated lines,
-        # dark/black lines on dark colored backgrounds, and monotonic 3-line dark steps.
+        # Bright isolated lines retain full saturation. Absolute thresholds
+        # blend dark isolated lines toward the median instead of the prior
+        # relative-luma guard's exact notch fallback; bound that tradeoff
+        # and the remaining hanging dots explicitly.
         iso_pattern = np.zeros((28, 64, 3), dtype=np.float32)
         iso_pattern[2, :] = [1.0, 0.0, 0.0]    # Bright isolated red line
         iso_pattern[6, :] = [0.0, 0.0, 0.26]   # Dark isolated blue line (Y ≈ 0.030)
@@ -296,15 +374,42 @@ class TestAnalogSimulation(unittest.TestCase):
                 self.assertLess(bleed_adapt, 1e-4)
                 self.assertGreater(bleed_comb, 0.01)
 
-                # Dark solid lines and monotonic dark steps must match notch without hanging-dot ripple
+                # A monotonic step whose center lies between its neighbors
+                # remains unchanged by the median.
                 np.testing.assert_allclose(
-                    outputs['adaptive'][dark_feature_rows, 100:800],
-                    outputs['notch'][dark_feature_rows, 100:800],
+                    outputs['adaptive'][24, 100:800],
+                    outputs['notch'][24, 100:800],
                     atol=1e-4, rtol=0,
                 )
+
+                # In gamma-domain chroma, this decoder retains about 50%
+                # of the dark-blue line and 64% of the dark-red line, both
+                # above 3-line comb. Previous relative thresholds preserved
+                # 100%; these bounds document the tuned guard's limitation.
+                gamma_yuv = {
+                    mode: np.power(output, 1.0 / 2.4) @ RGB_TO_YUV.T
+                    for mode, output in outputs.items()
+                }
+                for row, min_notch_fraction in [(6, 0.45), (10, 0.60)]:
+                    amplitudes = {
+                        mode: np.linalg.norm(values[row, 100:800, 1:], axis=-1).mean()
+                        for mode, values in gamma_yuv.items()
+                    }
+                    self.assertGreater(amplitudes['adaptive'], amplitudes['comb'])
+                    self.assertGreater(amplitudes['adaptive'], amplitudes['notch'] * min_notch_fraction)
+
+                # Dark features no longer match notch exactly, but their
+                # combined linear-RGB error is at least 70% below 3-line
+                # comb and their maximum error stays below 0.04.
+                dark_errors = {
+                    mode: output[dark_feature_rows, 100:800] - outputs['notch'][dark_feature_rows, 100:800]
+                    for mode, output in outputs.items()
+                }
+                self.assertLess(np.mean(dark_errors['adaptive'] ** 2), np.mean(dark_errors['comb'] ** 2) * 0.30)
+                self.assertLess(np.max(np.abs(dark_errors['adaptive'])), 0.04)
                 ripple_comb = np.mean(np.abs(np.diff(yuv['comb'][dark_feature_rows, 100:800, 0], axis=1)))
                 ripple_adapt = np.mean(np.abs(np.diff(yuv['adaptive'][dark_feature_rows, 100:800, 0], axis=1)))
-                self.assertLess(ripple_adapt, ripple_comb * 0.1)
+                self.assertLess(ripple_adapt, ripple_comb * 0.35)
 
     def test_ntsc_comb_complementary_line_fallback(self):
         # Complementary colors are anti-phase too, but must retain their chroma via luma guard.
@@ -334,25 +439,31 @@ class TestAnalogSimulation(unittest.TestCase):
                         line_color, atol=0.02, rtol=0,
                     )
 
-    def test_ntsc_comb_alternating_equal_luma_combing(self):
+    def test_ntsc_comb_alternating_equal_luma_chroma_retention(self):
         # Alternating chroma with identical luma has the exact same composite carrier
-        # waveform as subcarrier cross-color, so a 2D spatial median comb suppresses
-        # it identically to standard comb filtering.
+        # waveform as subcarrier cross-color. The tuned component-wise guard
+        # preserves part of it; this is the counterpart to admitting some
+        # full-contrast false color in the monochrome striped pattern.
+        from common import RGB_TO_YUV
         delta = np.array([0.35, -0.413 * 0.35 / 0.587, 0.35], dtype=np.float32)
         pattern = np.empty((16, 256, 3), dtype=np.float32)
         pattern[::2] = 0.5 + delta
         pattern[1::2] = 0.5 - delta
         for system in ['standard', 'snes']:
             with self.subTest(system=system):
-                comb = filtering.simulate_ntsc(
-                    pattern, samples=900, ntsc_system=system, ntsc_filter_type='comb',
-                )
-                adaptive = filtering.simulate_ntsc(
-                    pattern, samples=900, ntsc_system=system, ntsc_filter_type='adaptive',
-                )
-                np.testing.assert_allclose(
-                    adaptive[2:-2, 100:800], comb[2:-2, 100:800], atol=1e-4, rtol=0,
-                )
+                outputs = {
+                    mode: filtering.simulate_ntsc(
+                        pattern, samples=900, ntsc_system=system, ntsc_filter_type=mode,
+                    )
+                    for mode in ['notch', 'comb', 'adaptive']
+                }
+                amplitudes = {
+                    mode: np.linalg.norm((output @ RGB_TO_YUV.T)[2:-2, 100:800, 1:], axis=-1).mean()
+                    for mode, output in outputs.items()
+                }
+                self.assertLess(amplitudes['comb'], 1e-4)
+                self.assertGreater(amplitudes['adaptive'], amplitudes['notch'] * 0.65)
+                self.assertLess(amplitudes['adaptive'], amplitudes['notch'] * 0.85)
 
     def test_ntsc_boundary_safety(self):
         # Image with small height to test boundary conditions
