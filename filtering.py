@@ -500,6 +500,36 @@ def taichi_ntsc_decode_comb(
 
         carrier = chroma_carrier(u, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
         luma = composite - chroma.x * tm.sin(carrier) - chroma.y * tm.cos(carrier)
+        if gamma > 0.0:
+            field_out[y, x] = yuv_to_linear_taichi(tm.vec3(luma, chroma.x, chroma.y), gamma)
+        else:
+            field_out[y, x] = tm.vec3(luma, chroma.x, chroma.y)
+
+
+@ti.kernel
+def taichi_ntsc_decode_chroma_filter(
+    field_in: ti.template(),
+    field_out: ti.template(),
+    chroma_filter_width: float,
+    gamma: float,
+):
+    (height, samples) = field_in.shape
+    width_rcp = 1.0 / chroma_filter_width
+    i_bound = int(tm.floor(chroma_filter_width))
+
+    for y, x in field_out:
+        weight_sum = 0.0
+        chroma = tm.vec2(0.0, 0.0)
+        for i in range(-i_bound, i_bound + 1):
+            coeff = 0.5 + 0.5 * tm.cos(np.pi * i * width_rcp)
+            weight_sum += coeff
+            sample_x = x + i
+            if 0 <= sample_x < samples:
+                sample_val = field_in[y, sample_x]
+                chroma += coeff * tm.vec2(sample_val.y, sample_val.z)
+        if weight_sum > 0.0:
+            chroma = chroma / weight_sum
+        luma = field_in[y, x].x
         field_out[y, x] = yuv_to_linear_taichi(tm.vec3(luma, chroma.x, chroma.y), gamma)
 
 
@@ -607,7 +637,7 @@ def simulate_ntsc(
     f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 
-    # Pass 4: Y/C separation comb filter and conversion to linear RGB
+    # Pass 4: Y/C separation comb filter
     ft_val = 2.0
     if isinstance(ntsc_filter_type, str):
         ft_lower = ntsc_filter_type.lower()
@@ -620,11 +650,17 @@ def simulate_ntsc(
     else:
         ft_val = float(ntsc_filter_type)
 
-    f_linear_out = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_comb_yuv = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_comb(
-        f_demod_filtered, f_linear_out, ft_val, ntsc_frame_count,
-        ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame, gamma,
+        f_demod_filtered, f_comb_yuv, ft_val, ntsc_frame_count,
+        ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame, 0.0,
         is_interlaced_flag, odd_field_first_flag,
+    )
+
+    # Pass 5: Post-comb chroma low-pass filter and conversion to linear RGB
+    f_linear_out = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    taichi_ntsc_decode_chroma_filter(
+        f_comb_yuv, f_linear_out, chroma_filter_width, gamma,
     )
 
     return f_linear_out.to_numpy()

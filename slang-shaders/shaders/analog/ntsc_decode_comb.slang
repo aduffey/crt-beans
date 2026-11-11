@@ -209,5 +209,5 @@ void main() {
     float carrier = chroma_carrier(vTexCoord.x, float(texel_loc.y), params.FrameCount, ci, interlaced, params.OddFieldFirst);
     float luma = composite - chroma.r * sin(carrier) - chroma.g * cos(carrier);
 
-    FragColor.rgb = yuv_to_linear(vec3(luma, chroma.r, chroma.g));
+    FragColor = vec4(luma, chroma.r, chroma.g, 1.0);
 }

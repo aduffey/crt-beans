@@ -1,4 +1,4 @@
-shaders = 6
+shaders = 7
 
 //======== Simulate NTSC composite video.
 shader0 = shaders/analog/to_yuv.slang
@@ -23,24 +23,31 @@ scale_type2 = source
 scale2 = 1.0
 
 shader3 = shaders/analog/ntsc_decode_comb.slang
-alias3 = Linearized
 filter_linear3 = false
 wrap_mode3 = clamp_to_border
 mipmap_input3 = false
 scale_type3 = source
 scale3 = 1.0
 
-//======== Draw the scanlines, handling interlacing and overscan.
-shader4 = shaders/scanline_horizontal.slang
+shader4 = shaders/analog/ntsc_decode_chroma_filter.slang
+alias4 = Linearized
 filter_linear4 = false
 wrap_mode4 = clamp_to_border
 mipmap_input4 = false
-scale_type_x4 = viewport
-scale_x4 = 1.0
-scale_type_y4 = source
-scale_y4 = 1.0
+scale_type4 = source
+scale4 = 1.0
 
-shader5 = shaders/scanline_vertical_output.slang
+//======== Draw the scanlines, handling interlacing and overscan.
+shader5 = shaders/scanline_horizontal.slang
 filter_linear5 = false
 wrap_mode5 = clamp_to_border
 mipmap_input5 = false
+scale_type_x5 = viewport
+scale_x5 = 1.0
+scale_type_y5 = source
+scale_y5 = 1.0
+
+shader6 = shaders/scanline_vertical_output.slang
+filter_linear6 = false
+wrap_mode6 = clamp_to_border
+mipmap_input6 = false

@@ -197,7 +197,7 @@ class TestAnalogSimulation(unittest.TestCase):
             (bar_outputs['adaptive'] @ RGB_TO_YUV.T)[[6, 9], 100:800, 1:], axis=-1,
         ).mean()
         self.assertLess(bar_errors['adaptive'], bar_errors['comb'] * 0.1)
-        self.assertGreater(bleed_comb, 0.01)
+        self.assertGreater(bleed_comb, 0.005)
         self.assertLess(bleed_adaptive, 1e-5)
 
     def test_ntsc_comb_hanging_dots_reduction(self):

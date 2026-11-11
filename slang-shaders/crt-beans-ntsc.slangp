@@ -1,4 +1,4 @@
-shaders = 14
+shaders = 15
 
 textures = BlueNoiseTex
 
@@ -35,41 +35,41 @@ scale_type2 = source
 scale2 = 1.0
 
 shader3 = shaders/analog/ntsc_decode_comb.slang
-alias3 = Linearized
 filter_linear3 = false
 wrap_mode3 = clamp_to_border
 mipmap_input3 = false
 scale_type3 = source
 scale3 = 1.0
 
-//======== Draw the scanlines, handling interlacing and overscan.
-shader4 = shaders/scanline_horizontal.slang
+shader4 = shaders/analog/ntsc_decode_chroma_filter.slang
+alias4 = Linearized
 filter_linear4 = false
 wrap_mode4 = clamp_to_border
 mipmap_input4 = false
-scale_type_x4 = viewport
-scale_x4 = 1.0
-scale_type_y4 = source
-scale_y4 = 1.0
+scale_type4 = source
+scale4 = 1.0
 
-shader5 = shaders/scanline_vertical.slang
-alias5 = Scanlines
+//======== Draw the scanlines, handling interlacing and overscan.
+shader5 = shaders/scanline_horizontal.slang
 filter_linear5 = false
 wrap_mode5 = clamp_to_border
 mipmap_input5 = false
-scale_type5 = viewport
-scale5 = 1.0
+scale_type_x5 = viewport
+scale_x5 = 1.0
+scale_type_y5 = source
+scale_y5 = 1.0
+
+shader6 = shaders/scanline_vertical.slang
+alias6 = Scanlines
+filter_linear6 = false
+wrap_mode6 = clamp_to_border
+mipmap_input6 = false
+scale_type6 = viewport
+scale6 = 1.0
 
 //======== Downscale 3 times (to ~1/8 size per dimension) for glow blurring.
 // Downscale and perform the blur on a smaller texture for performance.
 // Use a 4x4 cubic downscale to minimize aliasing and shimmering in the blur.
-shader6 = shaders/cubic_downsample.slang
-filter_linear6 = true
-wrap_mode6 = clamp_to_border
-mipmap_input6 = false
-scale_type6 = source
-scale6 = 0.5
-
 shader7 = shaders/cubic_downsample.slang
 filter_linear7 = true
 wrap_mode7 = clamp_to_border
@@ -84,33 +84,33 @@ mipmap_input8 = false
 scale_type8 = source
 scale8 = 0.5
 
-//======== Blur for the glow: first pass horizontal, second pass vertical.
-shader9 = shaders/blur_horizontal.slang
+shader9 = shaders/cubic_downsample.slang
 filter_linear9 = true
 wrap_mode9 = clamp_to_border
 mipmap_input9 = false
 scale_type9 = source
-scale9 = 1.0
+scale9 = 0.5
 
-shader10 = shaders/blur_vertical.slang
+//======== Blur for the glow: first pass horizontal, second pass vertical.
+shader10 = shaders/blur_horizontal.slang
 filter_linear10 = true
 wrap_mode10 = clamp_to_border
 mipmap_input10 = false
 scale_type10 = source
 scale10 = 1.0
 
+shader11 = shaders/blur_vertical.slang
+filter_linear11 = true
+wrap_mode11 = clamp_to_border
+mipmap_input11 = false
+scale_type11 = source
+scale11 = 1.0
+
 //======== Upscale the blurred texture.
 // Repeated bilinear upscales blur the texture a bit more, which is noticeable
 // with small blur sigmas. However, here are no blocky artifacts like we would
 // get if we upscaled straight to the viewport size. The final upscale happens
 // in the composite pass.
-shader11 = shaders/bilinear_upsample.slang
-filter_linear11 = true
-wrap_mode11 = clamp_to_border
-mipmap_input11 = false
-scale_type11 = source
-scale11 = 2.0
-
 shader12 = shaders/bilinear_upsample.slang
 filter_linear12 = true
 wrap_mode12 = clamp_to_border
@@ -118,8 +118,15 @@ mipmap_input12 = false
 scale_type12 = source
 scale12 = 2.0
 
-//======== Composite the blur on the image, then convert to sRGB.
-shader13 = shaders/composite_output.slang
+shader13 = shaders/bilinear_upsample.slang
 filter_linear13 = true
 wrap_mode13 = clamp_to_border
 mipmap_input13 = false
+scale_type13 = source
+scale13 = 2.0
+
+//======== Composite the blur on the image, then convert to sRGB.
+shader14 = shaders/composite_output.slang
+filter_linear14 = true
+wrap_mode14 = clamp_to_border
+mipmap_input14 = false

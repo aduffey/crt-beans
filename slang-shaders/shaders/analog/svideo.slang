@@ -15,7 +15,7 @@ layout(push_constant) uniform Push {
 #pragma format R16G16B16A16_SFLOAT
 
 #pragma parameter LumaBandwidth "Luma bandwidth (MHz)" 4.0 0.6 6.0 0.2
-#pragma parameter ChromaBandwidth "Chroma bandwidth (MHz, each channel)" 1.2 0.6 1.6 0.2
+#pragma parameter ChromaBandwidth "Chroma bandwidth (MHz, each channel)" 0.9 0.6 1.6 0.1
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
