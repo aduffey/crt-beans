@@ -18,6 +18,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.luma_bandwidth, 4.0e6)
         self.assertEqual(cfg.chroma_bandwidth, 1.2e6)
         self.assertEqual(cfg.ntsc_filter_type, 'adaptive')
+        self.assertEqual(cfg.ntsc_luma_trap_depth, 0.0)
         self.assertEqual(cfg.ntsc_system, 'standard')
         self.assertEqual(cfg.ntsc_frame_count, 0)
         self.assertTrue(cfg.enable_masking)
@@ -39,6 +40,7 @@ class TestSimulationConfig(unittest.TestCase):
             luma_bandwidth=3.8e6,
             chroma_bandwidth=1.0e6,
             ntsc_filter_type='comb',
+            ntsc_luma_trap_depth=16.0,
             ntsc_system='snes',
             ntsc_frame_count=1,
             scanline_method='fast',
@@ -54,6 +56,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.luma_bandwidth, 3.8e6)
         self.assertEqual(cfg.chroma_bandwidth, 1.0e6)
         self.assertEqual(cfg.ntsc_filter_type, 'comb')
+        self.assertEqual(cfg.ntsc_luma_trap_depth, 16.0)
         self.assertEqual(cfg.ntsc_system, 'snes')
         self.assertEqual(cfg.ntsc_frame_count, 1)
         self.assertEqual(cfg.scanline_method, 'fast')
@@ -847,6 +850,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.luma_bandwidth, 4.0e6)
         self.assertEqual(args.chroma_bandwidth, 1.2e6)
         self.assertEqual(args.ntsc_filter_type, 'adaptive')
+        self.assertEqual(args.ntsc_luma_trap_depth, 0.0)
         self.assertEqual(args.ntsc_system, 'standard')
         self.assertEqual(args.ntsc_frame_count, 0)
         self.assertTrue(args.masking)
@@ -867,6 +871,7 @@ class TestCLIParser(unittest.TestCase):
             '--luma-bandwidth', '3.8e6',
             '--chroma-bandwidth', '1.0e6',
             '--ntsc-filter-type', 'comb',
+            '--ntsc-luma-trap-depth', '32',
             '--ntsc-system', 'snes',
             '--ntsc-frame-count', '1',
             '--interlacing-type', 'weave',
@@ -882,6 +887,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.luma_bandwidth, 3.8e6)
         self.assertEqual(args.chroma_bandwidth, 1.0e6)
         self.assertEqual(args.ntsc_filter_type, 'comb')
+        self.assertEqual(args.ntsc_luma_trap_depth, 32.0)
         self.assertEqual(args.ntsc_system, 'snes')
         self.assertEqual(args.ntsc_frame_count, 1)
         self.assertEqual(args.interlacing_type, 'weave')

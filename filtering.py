@@ -7,6 +7,47 @@ from common import texelFetch, gamma_to_yuv, yuv_to_linear, gamma_to_linear
 
 CHROMA_SUBCARRIER = (315.0 / 88.0) * 1e6
 ACTIVE_LINE_TIME = 52.5e-6
+LUMA_TRAP_OMEGA = 6.0 * np.pi
+
+
+def luma_trap_coefficients(luma_bandwidth: float, depth: float) -> np.ndarray:
+    """Return the integrated NTSC luma-trap correction for a depth in dB.
+
+    Coefficients include the positive attenuation's linear strength and the
+    2*pi scale factored out of the existing Hann source-pixel integrator.
+    The triangular window spans three subcarrier periods on either side.
+    """
+    if not np.isfinite(depth) or not 0.0 <= depth <= 32.0:
+        raise ValueError('NTSC luma trap depth must be between 0 and 32 dB')
+    if depth == 0.0:
+        return np.zeros(3, dtype=np.float32)
+    if not np.isfinite(luma_bandwidth) or luma_bandwidth <= 0.0:
+        raise ValueError('Luma bandwidth must be positive and finite')
+
+    # l = Hann half-width / trap half-width, independent of console timing.
+    l = CHROMA_SUBCARRIER / (6.0 * luma_bandwidth)
+    z = LUMA_TRAP_OMEGA * l + np.array([0.0, -np.pi, np.pi])
+    zz = z * z
+    small = np.abs(z) < 0.5
+    safe_z = np.where(small, 1.0, z)
+    sinc_series = 1.0 + zz * (-1.0 / 6.0 + zz * (1.0 / 120.0
+                  + zz * (-1.0 / 5040.0 + zz / 362880.0)))
+    j1_series = z * (1.0 / 3.0 + zz * (-1.0 / 30.0
+                + zz * (1.0 / 840.0 + zz * (-1.0 / 45360.0
+                + zz / 3991680.0))))
+    sinc = np.where(small, sinc_series, np.sin(z) / safe_z)
+    j1 = np.where(small, j1_series,
+                  (np.sin(z) - z * np.cos(z)) / (safe_z * safe_z))
+    A = sinc[0] + 0.5 * (sinc[1] + sinc[2])
+    Hprime = -l * (j1[0] + 0.5 * (j1[1] + j1[2]))
+    E = Hprime / (-1.0 / 12.0 - 1.0 / (4.0 * LUMA_TRAP_OMEGA ** 2))
+    coefficients = np.array([
+        2.0 * (A + E / LUMA_TRAP_OMEGA) / LUMA_TRAP_OMEGA,
+        E / LUMA_TRAP_OMEGA ** 2,
+        E / LUMA_TRAP_OMEGA,
+    ])
+    strength = 1.0 - 10.0 ** (-depth / 20.0)
+    return (2.0 * np.pi * strength * coefficients).astype(np.float32)
 
 
 @dataclass(frozen=True)
@@ -294,6 +335,64 @@ def filter_sim2(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, L: tm.vec3) -> 
         filtered += s * (left - right)
         left = right
     return filtered / (np.pi * 2.0)
+
+
+@ti.func
+def luma_trap_primitive(x: float, coefficients: tm.vec3) -> float:
+    """Integrated, slope-corrected carrier band in trap-radius coordinates."""
+    result = 0.0
+    u = 1.0 - ti.abs(x)
+    if u > 0.0:
+        s = tm.sin(LUMA_TRAP_OMEGA * x)
+        c = tm.cos(LUMA_TRAP_OMEGA * x)
+        result = ((coefficients.x * u - coefficients.y) * s
+                  - coefficients.z * x * u * c
+                  + coefficients.x * tm.sign(x) / LUMA_TRAP_OMEGA * (1.0 - c))
+    return result
+
+
+@ti.func
+def filter_sim_luma_trap(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4,
+                         L: tm.vec3, trap_radius: float,
+                         coefficients: tm.vec3) -> tm.vec3:
+    radius = tm.max(trap_radius, tm.max(L.r, tm.max(L.g, L.b)))
+    L_rcp = 1.0 / L
+    trap_radius_rcp = 1.0 / trap_radius
+    pix_y = int(tm.floor(vTexCoord.y * SourceSize.y))
+    t = vTexCoord.x
+    start = tm.max(int(tm.floor(SourceSize.x * (t - radius))), 0)
+    end = tm.min(int(tm.floor(SourceSize.x * (t + radius))), int(SourceSize.x) - 1)
+
+    offset = t - start * SourceSize.z
+    u = tm.clamp(offset * L_rcp, -1.0, 1.0)
+    left = np.pi * u + tm.sin(np.pi * u)
+    left.x -= luma_trap_primitive(offset * trap_radius_rcp, coefficients)
+    filtered = tm.vec3(0.0)
+    for pix_x in range(start, end + 1):
+        sample = texelFetch(Source, tm.ivec2(pix_x, pix_y))
+        offset = t - (pix_x + 1) * SourceSize.z
+        u = tm.clamp(offset * L_rcp, -1.0, 1.0)
+        right = np.pi * u + tm.sin(np.pi * u)
+        right.x -= luma_trap_primitive(offset * trap_radius_rcp, coefficients)
+        filtered += sample * (left - right)
+        left = right
+    # Keep signed Y: the narrow filter can ring before composite modulation.
+    return filtered / (np.pi * 2.0)
+
+
+@ti.kernel
+def taichi_filter_fragment_luma_trap(
+    field_in: ti.template(), field_out: ti.template(), L: tm.vec3,
+    trap_radius: float, coefficients: tm.vec3,
+):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = filter_sim_luma_trap(
+            vTexCoord, field_in, SourceSize, L, trap_radius, coefficients,
+        )
 
 
 @ti.kernel
@@ -593,8 +692,10 @@ def simulate_ntsc(
     ntsc_frame_count: int = 0,
     interlacing_type: str | float = 'bob',
     odd_field_first: bool | float = True,
+    ntsc_luma_trap_depth: float = 0.0,
 ) -> np.ndarray:
     """Simulate NTSC composite video encoding and decoding."""
+    trap_coefficients = luma_trap_coefficients(luma_bandwidth, ntsc_luma_trap_depth)
     in_h, in_w, _ = image_in.shape
     yuv_in = gamma_to_yuv(image_in)
 
@@ -614,7 +715,13 @@ def simulate_ntsc(
     f_yuv_in = ti.Vector.field(3, dtype=float, shape=(in_h, in_w))
     f_yuv_in.from_numpy(yuv_in)
     f_yuv_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
-    taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
+    if ntsc_luma_trap_depth == 0.0:
+        taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
+    else:
+        trap_radius = 3.0 / ci.periods_per_active_line
+        taichi_filter_fragment_luma_trap(
+            f_yuv_in, f_yuv_filtered, L, trap_radius, tm.vec3(trap_coefficients),
+        )
 
     # Pass 1b: Modulate to composite signal
     f_composite = ti.field(dtype=float, shape=(in_h, samples))
@@ -679,6 +786,7 @@ def simulate_analog(
     ntsc_frame_count: int = 0,
     interlacing_type: str | float = 'bob',
     odd_field_first: bool | float = True,
+    ntsc_luma_trap_depth: float = 0.0,
 ) -> np.ndarray:
     """High-level dispatcher for analog simulation frontends."""
     if analog_type in (None, 'none', 'linearize', 'disabled', False):
@@ -701,6 +809,7 @@ def simulate_analog(
             ntsc_frame_count=ntsc_frame_count,
             interlacing_type=interlacing_type,
             odd_field_first=odd_field_first,
+            ntsc_luma_trap_depth=ntsc_luma_trap_depth,
         )
     else:
         raise ValueError(

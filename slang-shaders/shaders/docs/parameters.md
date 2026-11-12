@@ -117,6 +117,16 @@ Video bandwidth applies the same filtering to all three RGB channels. Chroma ban
 
 In the NTSC preset, these parameters control filtering before the signals are combined into composite video. The decoder also applies a fixed carrier-locked chroma low-pass filter of approximately 1.2 MHz (subcarrier / 3), so increasing chroma bandwidth does not remove all color blurring.
 
+### Luma trap depth
+
+Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.
+
+This reduces brightness detail near the NTSC color subcarrier (approximately 3.58 MHz) before brightness and color are combined into composite video. It can reduce false colors and rainbows on fine text and patterns. The trap acts on the encoder's gamma-domain luma signal, independently of the decoder's Composite Y/C filter setting.
+
+`LumaTrapDepth` ranges from **0 to 32**, with a default of **0** (bypassed). Values are positive attenuation amounts in dB: `6` gives approximately −6 dB, or half the previous luma amplitude at the carrier; `32` leaves approximately 2.5%. The Python CLI uses `--ntsc-luma-trap-depth DB`.
+
+The notch width is fixed at roughly 1 MHz at the default 4 MHz luma bandwidth. Strong settings can introduce ringing around sharp edges, and enabling the trap increases filtering cost. Use the lowest depth that suppresses unwanted false color.
+
 ### Composite Y/C filter
 
 Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.

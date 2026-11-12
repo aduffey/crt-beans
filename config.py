@@ -14,6 +14,7 @@ class SimulationConfig:
 
     # NTSC composite options
     ntsc_filter_type: str = 'adaptive'  # 'adaptive', 'comb', 'notch'
+    ntsc_luma_trap_depth: float = 0.0   # Positive attenuation in dB, 0.0–32.0; 0 bypasses
     ntsc_system: str = 'standard'       # 'standard', 'nes', 'sms', 'tg16', 'genesis', 'snes', 'saturn', 'ps1', 'n64'
     ntsc_frame_count: int = 0
 

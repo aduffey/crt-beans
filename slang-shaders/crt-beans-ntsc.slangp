@@ -1,5 +1,7 @@
 shaders = 15
 
+LumaTrapDepth = 0.0
+
 textures = BlueNoiseTex
 
 // Blue noise texture from https://github.com/Calinou/free-blue-noise-textures

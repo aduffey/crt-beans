@@ -1,5 +1,7 @@
 shaders = 7
 
+LumaTrapDepth = 0.0
+
 //======== Simulate NTSC composite video.
 shader0 = shaders/analog/to_yuv.slang
 filter_linear0 = false

@@ -32,6 +32,7 @@ def simulate(img, config: SimulationConfig = None):
             luma_bandwidth=config.luma_bandwidth,
             chroma_bandwidth=config.chroma_bandwidth,
             ntsc_filter_type=config.ntsc_filter_type,
+            ntsc_luma_trap_depth=config.ntsc_luma_trap_depth,
             ntsc_system=config.ntsc_system,
             ntsc_frame_count=config.ntsc_frame_count,
             interlacing_type=config.interlacing_type,
@@ -87,6 +88,13 @@ def simulate(img, config: SimulationConfig = None):
     return img_diffused
 
 
+def _parse_luma_trap_depth(value):
+    depth = float(value)
+    if not np.isfinite(depth) or not 0.0 <= depth <= 32.0:
+        raise argparse.ArgumentTypeError('Luma trap depth must be between 0 and 32 dB')
+    return depth
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description='Generate a CRT-simulated image')
     parser.add_argument('input', help='Input image file path')
@@ -139,6 +147,10 @@ def build_parser():
                         choices=['adaptive', 'comb', 'notch'],
                         default=DEFAULT_CONFIG.ntsc_filter_type,
                         help='NTSC composite Y/C separation filter type')
+    parser.add_argument('--ntsc-luma-trap-depth', type=_parse_luma_trap_depth,
+                        default=DEFAULT_CONFIG.ntsc_luma_trap_depth,
+                        metavar='DB',
+                        help='NTSC encoder luma trap attenuation in dB (0–32, 0 bypasses)')
     parser.add_argument('--ntsc-system', dest='ntsc_system',
                         choices=['standard', 'nes', 'sms', 'tg16', 'pce', 'genesis', 'snes', 'saturn', 'ps1', 'psx', 'n64'],
                         default=DEFAULT_CONFIG.ntsc_system,
@@ -194,6 +206,7 @@ def main():
         luma_bandwidth=args.luma_bandwidth,
         chroma_bandwidth=args.chroma_bandwidth,
         ntsc_filter_type=args.ntsc_filter_type,
+        ntsc_luma_trap_depth=args.ntsc_luma_trap_depth,
         ntsc_system=args.ntsc_system,
         ntsc_frame_count=args.ntsc_frame_count,
         scanline_method=args.scanline_method,
