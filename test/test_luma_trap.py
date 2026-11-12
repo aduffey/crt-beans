@@ -13,14 +13,6 @@ import sim_taichi
 import filtering
 
 
-@ti.kernel
-def evaluate_trap_primitive(
-    positions: ti.template(), values: ti.template(), coefficients: tm.vec3,
-):
-    for i in positions:
-        values[i] = filtering.luma_trap_primitive(positions[i], coefficients)
-
-
 def check_ntsc_pipeline():
     image = np.random.default_rng(42).uniform(0.1, 0.9, (4, 32, 3)).astype(np.float32)
     baseline = filtering.simulate_ntsc(image, samples=64)
@@ -46,21 +38,18 @@ class TestLumaTrap(unittest.TestCase):
             1.0 / (2.0 * 1.2e6 * active_time),
             1.0 / (2.0 * 1.2e6 * active_time),
         )
+        strength = filtering.luma_trap_strength(depth)
         source = ti.Vector.field(3, dtype=ti.f32)
+        filtered = ti.Vector.field(3, dtype=ti.f32)
         output = ti.Vector.field(3, dtype=ti.f32)
         builder = ti.FieldsBuilder()
         builder.dense(ti.ij, image.shape[:2]).place(source)
-        builder.dense(ti.ij, (image.shape[0], samples)).place(output)
+        builder.dense(ti.ij, (image.shape[0], samples)).place(filtered, output)
         tree = builder.finalize()
         try:
             source.from_numpy(image.astype(np.float32))
-            if depth == 0.0:
-                filtering.taichi_filter_fragment(source, output, L)
-            else:
-                coefficients = filtering.luma_trap_coefficients(bandwidth, depth)
-                filtering.taichi_filter_fragment_luma_trap(
-                    source, output, L, 3.0 / periods, tm.vec3(coefficients),
-                )
+            filtering.taichi_filter_fragment(source, filtered, L)
+            filtering.taichi_luma_trap_fragment(filtered, output, periods, strength)
             return output.to_numpy()
         finally:
             tree.destroy()
@@ -69,33 +58,43 @@ class TestLumaTrap(unittest.TestCase):
         for depth in (-1.0, 32.01, np.nan, np.inf, -np.inf):
             with self.subTest(depth=depth):
                 with self.assertRaises(ValueError):
-                    filtering.luma_trap_coefficients(4.0e6, depth)
-        for bandwidth in (0.6e6, 1.2e6, filtering.CHROMA_SUBCARRIER, 4.0e6, 6.0e6):
-            with self.subTest(bandwidth=bandwidth):
-                for depth in (0.0, 6.0, 32.0):
-                    coefficients = filtering.luma_trap_coefficients(bandwidth, depth)
-                    self.assertEqual(coefficients.shape, (3,))
-                    self.assertTrue(np.all(np.isfinite(coefficients)))
+                    filtering.luma_trap_strength(depth)
+        self.assertEqual(filtering.luma_trap_strength(0.0), 0.0)
+        for depth in (6.0, 16.0, 32.0):
+            with self.subTest(depth=depth):
+                strength = filtering.luma_trap_strength(depth)
+                self.assertTrue(np.isfinite(strength))
+                self.assertAlmostEqual(1.0 - strength, 10.0 ** (-depth / 20.0), places=6)
 
-    def test_primitive_is_odd_and_compact(self):
-        x = np.linspace(-1.25, 1.25, 1001, dtype=np.float32)
-        positions = ti.field(dtype=ti.f32)
-        values = ti.field(dtype=ti.f32)
+    def test_impulse_response_is_symmetric_and_compact(self):
+        samples = 900
+        center = samples // 2
+        impulse = np.zeros((1, samples, 3), dtype=np.float32)
+        impulse[0, center, 0] = 1.0
+        source = ti.Vector.field(3, dtype=ti.f32)
+        output = ti.Vector.field(3, dtype=ti.f32)
         builder = ti.FieldsBuilder()
-        builder.dense(ti.i, x.shape[0]).place(positions, values)
+        builder.dense(ti.ij, (1, samples)).place(source, output)
         tree = builder.finalize()
         try:
-            positions.from_numpy(x)
-            for bandwidth in (0.6e6, filtering.CHROMA_SUBCARRIER, 4.0e6, 6.0e6):
-                with self.subTest(bandwidth=bandwidth):
-                    coefficients = filtering.luma_trap_coefficients(bandwidth, 32.0)
-                    evaluate_trap_primitive(positions, values, tm.vec3(coefficients))
-                    result = values.to_numpy()
-                    self.assertTrue(np.all(np.isfinite(result)))
-                    np.testing.assert_allclose(result, -result[::-1], atol=2e-7, rtol=0)
-                    np.testing.assert_array_equal(result[np.abs(x) >= 1.0], 0.0)
-            evaluate_trap_primitive(positions, values, tm.vec3(0.0))
-            np.testing.assert_array_equal(values.to_numpy(), 0.0)
+            source.from_numpy(impulse)
+            for periods in (filtering.chroma_info_standard().periods_per_active_line,
+                            filtering.chroma_info_nes(256).periods_per_active_line):
+                with self.subTest(periods=periods):
+                    strength = filtering.luma_trap_strength(32.0)
+                    filtering.taichi_luma_trap_fragment(source, output, periods, strength)
+                    response = output.to_numpy()[0, :, 0]
+                    radius = int(np.floor(3.0 * samples / periods))
+                    self.assertTrue(np.all(np.isfinite(response)))
+                    np.testing.assert_allclose(
+                        response[center - radius:center + radius + 1],
+                        response[center - radius:center + radius + 1][::-1],
+                        atol=2e-7, rtol=0,
+                    )
+                    np.testing.assert_array_equal(response[:center - radius], 0.0)
+                    np.testing.assert_array_equal(response[center + radius + 1:], 0.0)
+            filtering.taichi_luma_trap_fragment(source, output, periods, 0.0)
+            np.testing.assert_array_equal(output.to_numpy(), impulse)
         finally:
             tree.destroy()
 
@@ -113,7 +112,7 @@ class TestLumaTrap(unittest.TestCase):
 
     def test_carrier_attenuation_is_in_decibels(self):
         # Oversample the source so pixel-hold aliases are negligible. Measure
-        # the actual integrated filter rather than only its coefficient formula.
+        # the cascaded low-pass and discrete luma-trap passes.
         width, samples = 4096, 900
         source_x = (np.arange(width) + 0.5) / width
         output_x = (np.arange(samples) + 0.5) / samples
@@ -133,16 +132,16 @@ class TestLumaTrap(unittest.TestCase):
                 with self.subTest(periods=periods, depth=depth):
                     output = self.filter_yuv(image, depth, periods=periods)
                     attenuation = -20.0 * np.log10(amplitude(output) / baseline)
-                    self.assertAlmostEqual(attenuation, depth, delta=0.08)
+                    self.assertAlmostEqual(attenuation, depth, delta=0.01)
 
     def test_signed_ringing_survives_encoding_filter(self):
         image = np.zeros((1, 2048, 3), dtype=np.float32)
         image[:, 1024:, 0] = 1.0
         output = self.filter_yuv(image, 32.0)
         self.assertGreater(float(output[..., 0].max()), 1.02)
-        self.assertLess(float(output[..., 0].max()), 1.05)
+        self.assertLess(float(output[..., 0].max()), 1.06)
         self.assertLess(float(output[..., 0].min()), -0.02)
-        self.assertGreater(float(output[..., 0].min()), -0.05)
+        self.assertGreater(float(output[..., 0].min()), -0.06)
 
     def test_ntsc_default_is_exact_bypass_and_dispatches_depth(self):
         check_ntsc_pipeline()

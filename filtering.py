@@ -7,47 +7,15 @@ from common import texelFetch, gamma_to_yuv, yuv_to_linear, gamma_to_linear
 
 CHROMA_SUBCARRIER = (315.0 / 88.0) * 1e6
 ACTIVE_LINE_TIME = 52.5e-6
-LUMA_TRAP_OMEGA = 6.0 * np.pi
 
 
-def luma_trap_coefficients(luma_bandwidth: float, depth: float) -> np.ndarray:
-    """Return the integrated NTSC luma-trap correction for a depth in dB.
-
-    Coefficients include the positive attenuation's linear strength and the
-    2*pi scale factored out of the existing Hann source-pixel integrator.
-    The triangular window spans three subcarrier periods on either side.
-    """
+def luma_trap_strength(depth: float) -> float:
+    """Return the linear notch strength for an NTSC luma-trap depth in dB."""
     if not np.isfinite(depth) or not 0.0 <= depth <= 32.0:
         raise ValueError('NTSC luma trap depth must be between 0 and 32 dB')
     if depth == 0.0:
-        return np.zeros(3, dtype=np.float32)
-    if not np.isfinite(luma_bandwidth) or luma_bandwidth <= 0.0:
-        raise ValueError('Luma bandwidth must be positive and finite')
-
-    # l = Hann half-width / trap half-width, independent of console timing.
-    l = CHROMA_SUBCARRIER / (6.0 * luma_bandwidth)
-    z = LUMA_TRAP_OMEGA * l + np.array([0.0, -np.pi, np.pi])
-    zz = z * z
-    small = np.abs(z) < 0.5
-    safe_z = np.where(small, 1.0, z)
-    sinc_series = 1.0 + zz * (-1.0 / 6.0 + zz * (1.0 / 120.0
-                  + zz * (-1.0 / 5040.0 + zz / 362880.0)))
-    j1_series = z * (1.0 / 3.0 + zz * (-1.0 / 30.0
-                + zz * (1.0 / 840.0 + zz * (-1.0 / 45360.0
-                + zz / 3991680.0))))
-    sinc = np.where(small, sinc_series, np.sin(z) / safe_z)
-    j1 = np.where(small, j1_series,
-                  (np.sin(z) - z * np.cos(z)) / (safe_z * safe_z))
-    A = sinc[0] + 0.5 * (sinc[1] + sinc[2])
-    Hprime = -l * (j1[0] + 0.5 * (j1[1] + j1[2]))
-    E = Hprime / (-1.0 / 12.0 - 1.0 / (4.0 * LUMA_TRAP_OMEGA ** 2))
-    coefficients = np.array([
-        2.0 * (A + E / LUMA_TRAP_OMEGA) / LUMA_TRAP_OMEGA,
-        E / LUMA_TRAP_OMEGA ** 2,
-        E / LUMA_TRAP_OMEGA,
-    ])
-    strength = 1.0 - 10.0 ** (-depth / 20.0)
-    return (2.0 * np.pi * strength * coefficients).astype(np.float32)
+        return 0.0
+    return float(1.0 - 10.0 ** (-depth / 20.0))
 
 
 @dataclass(frozen=True)
@@ -338,61 +306,52 @@ def filter_sim2(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, L: tm.vec3) -> 
 
 
 @ti.func
-def luma_trap_primitive(x: float, coefficients: tm.vec3) -> float:
-    """Integrated, slope-corrected carrier band in trap-radius coordinates."""
-    result = 0.0
-    u = 1.0 - ti.abs(x)
-    if u > 0.0:
-        s = tm.sin(LUMA_TRAP_OMEGA * x)
-        c = tm.cos(LUMA_TRAP_OMEGA * x)
-        result = ((coefficients.x * u - coefficients.y) * s
-                  - coefficients.z * x * u * c
-                  + coefficients.x * tm.sign(x) / LUMA_TRAP_OMEGA * (1.0 - c))
-    return result
-
-
-@ti.func
-def filter_sim_luma_trap(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4,
-                         L: tm.vec3, trap_radius: float,
-                         coefficients: tm.vec3) -> tm.vec3:
-    radius = tm.max(trap_radius, tm.max(L.r, tm.max(L.g, L.b)))
-    L_rcp = 1.0 / L
-    trap_radius_rcp = 1.0 / trap_radius
-    pix_y = int(tm.floor(vTexCoord.y * SourceSize.y))
-    t = vTexCoord.x
-    start = tm.max(int(tm.floor(SourceSize.x * (t - radius))), 0)
-    end = tm.min(int(tm.floor(SourceSize.x * (t + radius))), int(SourceSize.x) - 1)
-
-    offset = t - start * SourceSize.z
-    u = tm.clamp(offset * L_rcp, -1.0, 1.0)
-    left = np.pi * u + tm.sin(np.pi * u)
-    left.x -= luma_trap_primitive(offset * trap_radius_rcp, coefficients)
-    filtered = tm.vec3(0.0)
-    for pix_x in range(start, end + 1):
-        sample = texelFetch(Source, tm.ivec2(pix_x, pix_y))
-        offset = t - (pix_x + 1) * SourceSize.z
-        u = tm.clamp(offset * L_rcp, -1.0, 1.0)
-        right = np.pi * u + tm.sin(np.pi * u)
-        right.x -= luma_trap_primitive(offset * trap_radius_rcp, coefficients)
-        filtered += sample * (left - right)
-        left = right
-    # Keep signed Y: the narrow filter can ring before composite modulation.
-    return filtered / (np.pi * 2.0)
+def luma_trap_sample(
+    field_yuv: ti.template(),
+    y: int,
+    x: int,
+    samples: int,
+    periods_per_active_line: float,
+    strength: float,
+) -> float:
+    """Apply the carrier-locked triangle-windowed luma trap to a filtered scanline."""
+    luma = field_yuv[y, x].x
+    if strength > 0.0:
+        width = 3.0 * samples / periods_per_active_line
+        width_rcp = 1.0 / width
+        omega_c = 2.0 * np.pi * periods_per_active_line / samples
+        radius = int(tm.floor(width))
+        trap = 0.0
+        norm = 0.0
+        for i in range(1, radius + 1):
+            c = tm.cos(i * omega_c)
+            w = (1.0 - i * width_rcp) * c
+            pos_luma = 0.0
+            neg_luma = 0.0
+            if x + i < samples:
+                pos_luma = field_yuv[y, x + i].x
+            if x - i >= 0:
+                neg_luma = field_yuv[y, x - i].x
+            trap += w * (pos_luma + neg_luma - 2.0 * luma)
+            norm += 2.0 * w * (c - 1.0)
+        luma -= strength * trap / norm
+    return luma
 
 
 @ti.kernel
-def taichi_filter_fragment_luma_trap(
-    field_in: ti.template(), field_out: ti.template(), L: tm.vec3,
-    trap_radius: float, coefficients: tm.vec3,
+def taichi_luma_trap_fragment(
+    field_in: ti.template(),
+    field_out: ti.template(),
+    periods_per_active_line: float,
+    strength: float,
 ):
-    (in_height, in_width) = field_in.shape
-    (out_height, out_width) = field_out.shape
-    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    (height, samples) = field_in.shape
     for y, x in field_out:
-        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
-        field_out[y, x] = filter_sim_luma_trap(
-            vTexCoord, field_in, SourceSize, L, trap_radius, coefficients,
+        yuv = field_in[y, x]
+        yuv.x = luma_trap_sample(
+            field_in, y, x, samples, periods_per_active_line, strength,
         )
+        field_out[y, x] = yuv
 
 
 @ti.kernel
@@ -405,13 +364,17 @@ def taichi_ntsc_encode_modulate(
     offset_per_frame: float,
     interlaced: int,
     odd_field_first: int,
+    trap_strength: float,
 ):
     (height, samples) = field_composite.shape
     for y, x in field_composite:
         t = (x + 0.5) / samples
         carrier = chroma_carrier(t, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
         yuv = field_yuv[y, x]
-        field_composite[y, x] = yuv.x + yuv.y * tm.sin(carrier) + yuv.z * tm.cos(carrier)
+        luma = luma_trap_sample(
+            field_yuv, y, x, samples, periods_per_active_line, trap_strength,
+        )
+        field_composite[y, x] = luma + yuv.y * tm.sin(carrier) + yuv.z * tm.cos(carrier)
 
 
 @ti.kernel
@@ -695,7 +658,7 @@ def simulate_ntsc(
     ntsc_luma_trap_depth: float = 0.0,
 ) -> np.ndarray:
     """Simulate NTSC composite video encoding and decoding."""
-    trap_coefficients = luma_trap_coefficients(luma_bandwidth, ntsc_luma_trap_depth)
+    trap_strength = luma_trap_strength(ntsc_luma_trap_depth)
     in_h, in_w, _ = image_in.shape
     yuv_in = gamma_to_yuv(image_in)
 
@@ -715,20 +678,14 @@ def simulate_ntsc(
     f_yuv_in = ti.Vector.field(3, dtype=float, shape=(in_h, in_w))
     f_yuv_in.from_numpy(yuv_in)
     f_yuv_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
-    if ntsc_luma_trap_depth == 0.0:
-        taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
-    else:
-        trap_radius = 3.0 / ci.periods_per_active_line
-        taichi_filter_fragment_luma_trap(
-            f_yuv_in, f_yuv_filtered, L, trap_radius, tm.vec3(trap_coefficients),
-        )
+    taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
 
-    # Pass 1b: Modulate to composite signal
+    # Pass 2a: Apply optional luma trap and modulate to composite signal
     f_composite = ti.field(dtype=float, shape=(in_h, samples))
     taichi_ntsc_encode_modulate(
         f_yuv_filtered, f_composite, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
-        is_interlaced_flag, odd_field_first_flag,
+        is_interlaced_flag, odd_field_first_flag, trap_strength,
     )
 
     # Pass 2: Demodulate composite signal

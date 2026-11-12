@@ -125,7 +125,7 @@ This reduces brightness detail near the NTSC color subcarrier (approximately 3.5
 
 `LumaTrapDepth` ranges from **0 to 32**, with a default of **0** (bypassed). Values are positive attenuation amounts in dB: `6` gives approximately −6 dB, or half the previous luma amplitude at the carrier; `32` leaves approximately 2.5%. The Python CLI uses `--ntsc-luma-trap-depth DB`.
 
-The notch width is fixed at roughly 1 MHz at the default 4 MHz luma bandwidth. Strong settings can introduce ringing around sharp edges, and enabling the trap increases filtering cost. Use the lowest depth that suppresses unwanted false color.
+The notch width is fixed at roughly 1 MHz. Strong settings can introduce ringing around sharp edges, and enabling the trap increases filtering cost. Use the lowest depth that suppresses unwanted false color.
 
 ### Composite Y/C filter
 
