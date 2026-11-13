@@ -69,10 +69,11 @@ void main() {
     // doesn't really affect the demodulation. It's just inconvenient to deal
     // with.
     bool interlaced = is_interlaced(params.InterlacingType, params.SourceSize);
-    float carrier = chroma_carrier(vTexCoord.x, float(texel_loc.y), params.FrameCount, ci, interlaced, params.OddFieldFirst);
-    float composite = dot(filtered, vec3(1.0, sin(carrier), cos(carrier)));
+    float carrier_phase = chroma_carrier(vTexCoord.x, float(texel_loc.y), params.FrameCount, ci, interlaced, params.OddFieldFirst);
+    vec2 carriers = vec2(sin(carrier_phase), cos(carrier_phase));
+    float composite = dot(filtered, vec3(1.0, carriers));
 
     // We'll just demodulate here, too, to save a pass.
-    vec2 chroma = composite * vec2(2.0 * sin(carrier), 2.0 * cos(carrier));
+    vec2 chroma = 2.0 * composite * carriers;
     FragColor.rgb = vec3(composite, chroma.r, chroma.g);
 }
