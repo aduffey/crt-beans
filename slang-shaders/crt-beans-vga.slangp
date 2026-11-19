@@ -30,7 +30,7 @@ scale_type0 = source
 scale0 = 1.0
 
 //======== Draw the scanlines, handling interlacing and overscan.
-shader1 = shaders/scanline_horizontal.slang
+shader1 = shaders/scanline_horizontal_zoh.slang
 filter_linear1 = false
 wrap_mode1 = clamp_to_border
 mipmap_input1 = false

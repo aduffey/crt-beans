@@ -13,7 +13,7 @@ class TestSimulationConfig(unittest.TestCase):
         cfg = SimulationConfig()
         self.assertTrue(cfg.enable_analog)
         self.assertEqual(cfg.analog_type, 'rgb')
-        self.assertEqual(cfg.samples, 900)
+        self.assertEqual(cfg.samples, 1800)
         self.assertEqual(cfg.rgb_bandwidth, 4.0e6)
         self.assertEqual(cfg.luma_bandwidth, 4.0e6)
         self.assertEqual(cfg.chroma_bandwidth, 1.2e6)

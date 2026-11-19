@@ -568,6 +568,15 @@ def taichi_ntsc_decode_comb(
             field_out[y, x] = tm.vec3(luma, chroma.x, chroma.y)
 
 
+@ti.func
+def lanczos3(x: float) -> float:
+    res = 1.0
+    if x >= 1.0e-5:
+        pi_x = np.pi * x
+        res = (tm.sin(pi_x) * tm.sin(pi_x * (1.0 / 3.0))) / (pi_x * pi_x * (1.0 / 3.0))
+    return res
+
+
 @ti.kernel
 def taichi_ntsc_decode_chroma_filter(
     field_in: ti.template(),
@@ -575,23 +584,40 @@ def taichi_ntsc_decode_chroma_filter(
     chroma_filter_width: float,
     gamma: float,
 ):
-    (height, samples) = field_in.shape
+    (height, in_samples) = field_in.shape
+    (_, out_samples) = field_out.shape
     width_rcp = 1.0 / chroma_filter_width
-    i_bound = int(tm.floor(chroma_filter_width))
 
     for y, x in field_out:
-        weight_sum = 0.0
+        tex_x = (x + 0.5) / out_samples * in_samples
+        chroma_start = int(tm.floor(tex_x - chroma_filter_width + 0.5))
+        chroma_stop = int(tm.floor(tex_x + chroma_filter_width - 0.5))
+        luma_start = int(tm.floor(tex_x - 3.0 + 0.5))
+        luma_stop = int(tm.floor(tex_x + 3.0 - 0.5))
+        start_x = tm.min(chroma_start, luma_start)
+        stop_x = tm.max(chroma_stop, luma_stop)
+
+        chroma_weight_sum = 0.0
         chroma = tm.vec2(0.0, 0.0)
-        for i in range(-i_bound, i_bound + 1):
-            coeff = 0.5 + 0.5 * tm.cos(np.pi * i * width_rcp)
-            weight_sum += coeff
-            sample_x = x + i
-            if 0 <= sample_x < samples:
-                sample_val = field_in[y, sample_x]
-                chroma += coeff * tm.vec2(sample_val.y, sample_val.z)
-        if weight_sum > 0.0:
-            chroma = chroma / weight_sum
-        luma = field_in[y, x].x
+        luma_weight_sum = 0.0
+        luma = 0.0
+        for ix in range(start_x, stop_x + 1):
+            abs_dx = ti.abs(tex_x - (ix + 0.5))
+            sample_val = tm.vec3(0.0, 0.0, 0.0)
+            if 0 <= ix < in_samples:
+                sample_val = field_in[y, ix]
+            if abs_dx < chroma_filter_width:
+                c_coeff = 0.5 + 0.5 * tm.cos(np.pi * abs_dx * width_rcp)
+                chroma_weight_sum += c_coeff
+                chroma += c_coeff * tm.vec2(sample_val.y, sample_val.z)
+            if abs_dx < 3.0:
+                l_coeff = lanczos3(abs_dx)
+                luma_weight_sum += l_coeff
+                luma += l_coeff * sample_val.x
+        if chroma_weight_sum > 0.0:
+            chroma = chroma / chroma_weight_sum
+        if luma_weight_sum > 0.0:
+            luma = luma / luma_weight_sum
         field_out[y, x] = yuv_to_linear_taichi(tm.vec3(luma, chroma.x, chroma.y), gamma)
 
 
@@ -602,7 +628,7 @@ def simulate_linearize(image_in: np.ndarray, gamma: float = 2.4) -> np.ndarray:
 
 def simulate_rgb(
     image_in: np.ndarray,
-    samples: int = 900,
+    samples: int = 1800,
     gamma: float = 2.4,
     rgb_bandwidth: float = 4.0e6,
 ) -> np.ndarray:
@@ -621,7 +647,7 @@ def simulate_rgb(
 
 def simulate_svideo(
     image_in: np.ndarray,
-    samples: int = 900,
+    samples: int = 1800,
     gamma: float = 2.4,
     luma_bandwidth: float = 4.0e6,
     chroma_bandwidth: float = 1.2e6,
@@ -646,7 +672,7 @@ def simulate_svideo(
 
 def simulate_ntsc(
     image_in: np.ndarray,
-    samples: int = 900,
+    samples: int = 1800,
     gamma: float = 2.4,
     luma_bandwidth: float = 4.0e6,
     chroma_bandwidth: float = 1.2e6,
@@ -656,11 +682,13 @@ def simulate_ntsc(
     interlacing_type: str | float = 'bob',
     odd_field_first: bool | float = True,
     ntsc_luma_trap_depth: float = 0.0,
+    ntsc_samples: int | None = None,
 ) -> np.ndarray:
     """Simulate NTSC composite video encoding and decoding."""
     trap_strength = luma_trap_strength(ntsc_luma_trap_depth)
     in_h, in_w, _ = image_in.shape
     yuv_in = gamma_to_yuv(image_in)
+    internal_samples = ntsc_samples if ntsc_samples is not None else min(samples, 900)
 
     ci = get_chroma_info(ntsc_system, in_w, ntsc_frame_count)
     active_line_seconds = ci.periods_per_active_line / CHROMA_SUBCARRIER
@@ -677,11 +705,11 @@ def simulate_ntsc(
     # Pass 1: Horizontal low-pass filter on YUV
     f_yuv_in = ti.Vector.field(3, dtype=float, shape=(in_h, in_w))
     f_yuv_in.from_numpy(yuv_in)
-    f_yuv_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_yuv_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, internal_samples))
     taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
 
     # Pass 2a: Apply optional luma trap and modulate to composite signal
-    f_composite = ti.field(dtype=float, shape=(in_h, samples))
+    f_composite = ti.field(dtype=float, shape=(in_h, internal_samples))
     taichi_ntsc_encode_modulate(
         f_yuv_filtered, f_composite, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
@@ -689,7 +717,7 @@ def simulate_ntsc(
     )
 
     # Pass 2: Demodulate composite signal
-    f_demod = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_demod = ti.Vector.field(3, dtype=float, shape=(in_h, internal_samples))
     taichi_ntsc_decode_demodulate(
         f_composite, f_demod, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
@@ -697,8 +725,8 @@ def simulate_ntsc(
     )
 
     # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
-    chroma_filter_width = 1.5 * samples / ci.periods_per_active_line
-    f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, samples))
+    chroma_filter_width = 1.5 * internal_samples / ci.periods_per_active_line
+    f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, internal_samples))
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 
     # Pass 4: Y/C separation comb filter
@@ -714,14 +742,14 @@ def simulate_ntsc(
     else:
         ft_val = float(ntsc_filter_type)
 
-    f_comb_yuv = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_comb_yuv = ti.Vector.field(3, dtype=float, shape=(in_h, internal_samples))
     taichi_ntsc_decode_comb(
         f_demod_filtered, f_comb_yuv, ft_val, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame, 0.0,
         is_interlaced_flag, odd_field_first_flag,
     )
 
-    # Pass 5: Post-comb chroma low-pass filter and conversion to linear RGB
+    # Pass 5: Post-comb chroma low-pass filter, luma resampling, and conversion to linear RGB
     f_linear_out = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
     taichi_ntsc_decode_chroma_filter(
         f_comb_yuv, f_linear_out, chroma_filter_width, gamma,
@@ -733,7 +761,7 @@ def simulate_ntsc(
 def simulate_analog(
     image_in: np.ndarray,
     analog_type: str = 'rgb',
-    samples: int = 900,
+    samples: int = 1800,
     gamma: float = 2.4,
     rgb_bandwidth: float = 4.0e6,
     luma_bandwidth: float = 4.0e6,

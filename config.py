@@ -6,7 +6,7 @@ class SimulationConfig:
     # Analog simulation frontend
     enable_analog: bool = True
     analog_type: str = 'rgb'  # 'none'/'linearize', 'rgb', 'svideo', 'ntsc'
-    samples: int = 900  # 1024, 2880, 907, 1400
+    samples: int = 1800  # 900, 1440, 1800, 2880
     gamma: float = 2.4
     rgb_bandwidth: float = 4.0e6      # 4.0 MHz for RGB
     luma_bandwidth: float = 4.0e6     # 4.0 MHz for S-Video and NTSC luma

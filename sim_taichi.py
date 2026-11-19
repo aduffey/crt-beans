@@ -44,6 +44,7 @@ def simulate(img, config: SimulationConfig = None):
 
     # Stage 2: CRT scanline spot simulation
     img_linear = img_linear.astype(np.float32)
+    use_analog_filter = config.enable_analog and config.analog_type not in (None, 'none', 'linearize', 'disabled', False)
     print(f'Simulating CRT spot ({config.scanline_method})...')
     output_dim = (config.output_resolution[0], config.output_resolution[1], 3)
     img_spot = simulate_spot(
@@ -57,6 +58,7 @@ def simulate(img, config: SimulationConfig = None):
         interlacing_type=config.interlacing_type,
         odd_field_first=config.odd_field_first,
         frame_count=config.ntsc_frame_count,
+        force_zoh=not use_analog_filter,
     )
 
     # Stage 3: Mask

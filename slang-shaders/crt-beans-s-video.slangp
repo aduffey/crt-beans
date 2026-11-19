@@ -24,7 +24,7 @@ alias1 = Linearized
 filter_linear1 = false
 mipmap_input1 = false
 scale_type_x1 = absolute
-scale_x1 = 900
+scale_x1 = 1800
 scale_type_y1 = source
 scale_y1 = 1.0
 
