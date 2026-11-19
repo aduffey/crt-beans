@@ -3,57 +3,57 @@
 #include "mask.inc"
 #include "line_handling.inc"
 
-vec3 scanlines(lines_t lines, float u) {
-    uvec3 upper_packed = textureLod(Source, vec2(u, lines.upper_sample_y), 0.0).rgb;
-    vec2 upper_r = unpackHalf2x16(upper_packed.r);
-    vec2 upper_g = unpackHalf2x16(upper_packed.g);
-    vec2 upper_b = unpackHalf2x16(upper_packed.b);
-    vec3 upper_sample = vec3(upper_r.x, upper_g.x, upper_b.x);
-    vec3 upper_width_rcp = vec3(upper_r.y, upper_g.y, upper_b.y);
+vec3 evaluate_scanline(int x, int y, float distance_y, int source_height) {
+    if (y < 0 || y >= source_height) {
+        return vec3(0.0);
+    }
 
-    vec3 upper_y = clamp(abs(lines.upper_distance_y) * upper_width_rcp, 0.0, 1.0);
-    vec3 upper_value = upper_sample * ((upper_y * upper_y) * (2.0 * upper_y - 3.0) + 1.0);
+    uvec3 packed_sample = texelFetch(Source, ivec2(x, y), 0).rgb;
+    vec2 r = unpackHalf2x16(packed_sample.r);
+    vec2 g = unpackHalf2x16(packed_sample.g);
+    vec2 b = unpackHalf2x16(packed_sample.b);
+    vec3 sample_value = vec3(r.x, g.x, b.x);
+    vec3 width_rcp = vec3(r.y, g.y, b.y);
 
-    uvec3 lower_packed = textureLod(Source, vec2(u, lines.lower_sample_y), 0.0).rgb;
-    vec2 lower_r = unpackHalf2x16(lower_packed.r);
-    vec2 lower_g = unpackHalf2x16(lower_packed.g);
-    vec2 lower_b = unpackHalf2x16(lower_packed.b);
-    vec3 lower_sample = vec3(lower_r.x, lower_g.x, lower_b.x);
-    vec3 lower_width_rcp = vec3(lower_r.y, lower_g.y, lower_b.y);
+    vec3 dy = clamp(abs(distance_y) * width_rcp, 0.0, 1.0);
+    return sample_value * ((dy * dy) * (2.0 * dy - 3.0) + 1.0);
+}
 
-    vec3 lower_y = clamp(abs(lines.lower_distance_y) * lower_width_rcp, 0.0, 1.0);
-    vec3 lower_value = lower_sample * ((lower_y * lower_y) * (2.0 * lower_y - 3.0) + 1.0);
-
-    return upper_value + lower_value;
+vec3 scanlines(lines_t lines, int x, int source_height) {
+    return evaluate_scanline(x, lines.upper_sample_y, lines.upper_distance_y, source_height) +
+           evaluate_scanline(x, lines.lower_sample_y, lines.lower_distance_y, source_height);
 }
 
 vec3 render_scanlines(vec2 vTexCoord, vec2 viewportCoord) {
+    int x = clamp(int(floor(vTexCoord.x * params.SourceSize.x)), 0, int(params.SourceSize.x) - 1);
+    int source_height = int(params.SourceSize.y);
+
     vec3 value = vec3(0.0);
     if (params.InterlacingType == 2.0 && params.SourceSize.y < 350) {
         // VGA line doubling
         lines_t lines = get_doubled_lines(vTexCoord.y, params.SourceSize);
-        value = scanlines(lines, vTexCoord.x);
+        value = scanlines(lines, x, source_height);
     } else if (params.InterlacingType >= 2.0 || params.SourceSize.y <= 300.0) {
         // no interlacing
         lines_t lines = get_closest_lines(vTexCoord.y, params.SourceSize);
-        value = scanlines(lines, vTexCoord.x);
+        value = scanlines(lines, x, source_height);
     } else if (params.InterlacingType == 1.0) {
         // weave
         // Simulate even and odd fields, then average them together
         lines_t lines_even = get_even_lines(vTexCoord.y, params.SourceSize);
         lines_t lines_odd = get_odd_lines(vTexCoord.y, params.SourceSize);
-        value = 0.5 * (scanlines(lines_even, vTexCoord.x) + scanlines(lines_odd, vTexCoord.x));
+        value = 0.5 * (scanlines(lines_even, x, source_height) + scanlines(lines_odd, x, source_height));
     } else {
         // bob
         uint phase = (params.OddFieldFirst > 0.5) ? 1u : 0u;
         if ((params.FrameCount + phase) % 2u == 0u) {
             // odd field
             lines_t lines = get_odd_lines(vTexCoord.y, params.SourceSize);
-            value = scanlines(lines, vTexCoord.x);
+            value = scanlines(lines, x, source_height);
         } else {
             // even field
             lines_t lines = get_even_lines(vTexCoord.y, params.SourceSize);
-            value = scanlines(lines, vTexCoord.x);
+            value = scanlines(lines, x, source_height);
         }
     }
 
