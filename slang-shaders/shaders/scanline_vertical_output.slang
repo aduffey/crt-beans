@@ -10,11 +10,8 @@ layout(push_constant) uniform Push {
     vec4 SourceSize;
     vec4 OutputSize;
     uint FrameCount;
-    float MaxSpotSize;
-    float MinSpotSize;
     float InterlacingType;
     float OddFieldFirst;
-    float OverscanHorizontal;
     float OverscanVertical;
     float MaskType;
     float SubpixelMaskPattern;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #pragma parameter LumaBandwidth "Luma bandwidth (MHz)" 4.0 0.6 6.0 0.2
-#pragma parameter ChromaBandwidth "Chroma bandwidth (MHz, each channel)" 1.2 0.6 6.0 0.2
+#pragma parameter ChromaBandwidth "Chroma bandwidth (MHz, each channel)" 1.0 0.6 6.0 0.2
 #pragma parameter LumaTrapDepth "Luma trap depth (-dB)" 0.0 0.0 32.0 1.0
 #pragma parameter FilterType "Composite Y/C filter (0: notch, 1: comb, 2: adaptive comb)" 2.0 0.0 2.0 1.0
 #pragma parameter System "NTSC system" 0.0 0.0 8.0 1.0

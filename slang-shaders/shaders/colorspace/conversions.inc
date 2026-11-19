@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 const float CRT_GAMMA = 2.4;
 
 // These matrices were produced by the yuv_matrix.py script.

@@ -10,7 +10,6 @@ layout(push_constant) uniform Push {
     vec4 SourceSize;
     vec4 OriginalSize;
     float System;
-    uint FrameCount;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
@@ -48,7 +47,7 @@ float lanczos3(float x) {
 }
 
 void main() {
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
 
     // Low-pass filter the displayed chroma with the same carrier-locked Hann
     // window as the demodulation pass, and resample luma with Lanczos-3 so

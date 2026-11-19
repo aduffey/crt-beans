@@ -8,7 +8,6 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 
 layout(push_constant) uniform Push {
     vec4 SourceSize;
-    vec4 OutputSize;
     vec4 FinalViewportSize;
     float MaxSpotSize;
     float MinSpotSize;

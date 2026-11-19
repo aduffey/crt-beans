@@ -8,7 +8,6 @@ scale_type0 = source
 scale0 = 1.0
 
 shader1 = shaders/analog/svideo.slang
-alias1 = Linearized
 filter_linear1 = false
 mipmap_input1 = false
 scale_type_x1 = absolute

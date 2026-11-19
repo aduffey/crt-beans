@@ -10,9 +10,9 @@ struct chroma_info {
 };
 
 // NOTE: The chroma phases may not be accurate in an absolute sense. We can't
-// we can't really tell when the chroma clock started, so we just set 0 to be
-// the first input sample. So the phase may be off by some amount. This won't
-// affect the patterns that are seen, but it may affect the actual colors.
+// really tell when the chroma clock started, so we just set 0 to be the first
+// input sample. So the phase may be off by some amount. This won't affect the
+// patterns that are seen, but it may affect the actual colors.
 // TODO better explanation.
 
 chroma_info chroma_info_standard() {
@@ -23,7 +23,7 @@ chroma_info chroma_info_standard() {
     return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
 
-chroma_info chroma_info_nes(vec4 original_size, uint frame_count) {
+chroma_info chroma_info_nes(vec4 original_size) {
     // The NES master clock (MCLK) is 21477270 Hz (6 * 3579545 Hz). There are 4
     // cycles per pixel.
     //
@@ -46,6 +46,7 @@ chroma_info chroma_info_nes(vec4 original_size, uint frame_count) {
     // See: https://www.nesdev.org/wiki/NTSC_video
 
     float periods_per_active_line = 4.0 / 6.0 * original_size.x;
+    // TODO 682/3 causes floating point errors to accumulate as scanlines increase
     return chroma_info(periods_per_active_line, 682.0 / 3.0, 1.0 / 3.0);
 }
 
@@ -119,7 +120,7 @@ chroma_info chroma_info_genesis(vec4 original_size) {
     return chroma_info(periods_per_active_line, 228.0, 0.0);
 }
 
-chroma_info chroma_info_snes(vec4 original_size, uint frame_count) {
+chroma_info chroma_info_snes(vec4 original_size) {
     // The SNES master clock (MCLK) is 21477270 Hz (6 * 3579545 Hz). When
     // outputting 256 pixels, there are 4 cycles per pixel[1].
     //
@@ -241,13 +242,13 @@ chroma_info chroma_info_n64() {
     return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
 
-chroma_info get_chroma_info(float system, vec4 original_size, uint frame_count) {
+chroma_info get_chroma_info(float system, vec4 original_size) {
     if (system < 0.5) {
         // Standard
         return chroma_info_standard();
     } else if (system < 1.5) {
         // NES
-        return chroma_info_nes(original_size, frame_count);
+        return chroma_info_nes(original_size);
     } else if (system < 2.5) {
         // SMS
         return chroma_info_sms(original_size);
@@ -259,7 +260,7 @@ chroma_info get_chroma_info(float system, vec4 original_size, uint frame_count) 
         return chroma_info_genesis(original_size);
     } else if (system < 5.5) {
         // SNES
-        return chroma_info_snes(original_size, frame_count);
+        return chroma_info_snes(original_size);
     } else if (system < 6.5) {
         // Saturn
         return chroma_info_saturn(original_size);

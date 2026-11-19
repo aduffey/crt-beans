@@ -10,7 +10,7 @@ class SimulationConfig:
     gamma: float = 2.4
     rgb_bandwidth: float = 4.0e6      # 4.0 MHz for RGB
     luma_bandwidth: float = 4.0e6     # 4.0 MHz for S-Video and NTSC luma
-    chroma_bandwidth: float = 1.2e6   # 1.2 MHz for S-Video and NTSC chroma
+    chroma_bandwidth: float = 1.0e6   # 1.0 MHz for S-Video and NTSC chroma
 
     # NTSC composite options
     ntsc_filter_type: str = 'adaptive'  # 'adaptive', 'comb', 'notch'

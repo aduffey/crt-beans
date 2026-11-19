@@ -650,7 +650,7 @@ def simulate_svideo(
     samples: int = 1800,
     gamma: float = 2.4,
     luma_bandwidth: float = 4.0e6,
-    chroma_bandwidth: float = 1.2e6,
+    chroma_bandwidth: float = 1.0e6,
 ) -> np.ndarray:
     """Simulate an S-Video signal with separate luma and chroma horizontal filtering."""
     in_h, in_w, _ = image_in.shape
@@ -675,7 +675,7 @@ def simulate_ntsc(
     samples: int = 1800,
     gamma: float = 2.4,
     luma_bandwidth: float = 4.0e6,
-    chroma_bandwidth: float = 1.2e6,
+    chroma_bandwidth: float = 1.0e6,
     ntsc_filter_type: str | float = 'adaptive',
     ntsc_system: str = 'standard',
     ntsc_frame_count: int = 0,
@@ -765,7 +765,7 @@ def simulate_analog(
     gamma: float = 2.4,
     rgb_bandwidth: float = 4.0e6,
     luma_bandwidth: float = 4.0e6,
-    chroma_bandwidth: float = 1.2e6,
+    chroma_bandwidth: float = 1.0e6,
     ntsc_filter_type: str = 'adaptive',
     ntsc_system: str = 'standard',
     ntsc_frame_count: int = 0,

@@ -20,7 +20,6 @@ scale_type0 = source
 scale0 = 1.0
 
 shader1 = shaders/analog/svideo.slang
-alias1 = Linearized
 filter_linear1 = false
 mipmap_input1 = false
 scale_type_x1 = absolute
@@ -87,7 +86,7 @@ scale8 = 1.0
 
 //======== Upscale the blurred texture.
 // Repeated bilinear upscales blur the texture a bit more, which is noticeable
-// with small blur sigmas. However, here are no blocky artifacts like we would
+// with small blur sigmas. However, there are no blocky artifacts like we would
 // get if we upscaled straight to the viewport size. The final upscale happens
 // in the composite pass.
 shader9 = shaders/bilinear_upsample.slang

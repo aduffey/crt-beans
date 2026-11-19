@@ -47,7 +47,7 @@ void main() {
     gl_Position = MVP * Position;
     vTexCoord = TexCoord;
 
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
     float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
     float wc = 2.0 * PI * (ci.periods_per_active_line * params.SourceSize.z);
 
@@ -67,8 +67,6 @@ layout(location = 2) flat in vec4 vWeightsLower;
 layout(location = 0) out vec4 FragColor;
 layout(binding = 1) uniform sampler2D Source;
 
-#include "../colorspace/conversions.inc"
-
 vec3 interpolate4(vec2 center_coord, vec4 w) {
     vec3 result = w.x * textureLodOffset(Source, center_coord, 0.0, ivec2(-1, 0)).gba;
     result += w.y * textureLodOffset(Source, center_coord, 0.0, ivec2( 0, 0)).gba;
@@ -79,7 +77,7 @@ vec3 interpolate4(vec2 center_coord, vec4 w) {
 
 void main() {
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
     bool interlaced = is_interlaced(params.InterlacingType, params.SourceSize);
     int line_step = interlaced ? 2 : 1;
     float uv_step_y = float(line_step) * params.SourceSize.w;

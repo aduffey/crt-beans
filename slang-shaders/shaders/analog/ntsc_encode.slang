@@ -38,7 +38,7 @@ layout(binding = 1) uniform sampler2D Source;
 #include "chroma_carrier.inc"
 
 void main() {
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
     vec3 filtered = texelFetch(Source, texel_loc, 0).rgb;
 

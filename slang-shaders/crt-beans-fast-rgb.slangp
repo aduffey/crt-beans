@@ -2,7 +2,6 @@ shaders = 3
 
 //======== Simulate an analog RGB signal.
 shader0 = shaders/analog/rgb.slang
-alias0 = Linearized
 filter_linear0 = false
 mipmap_input0 = false
 scale_type_x0 = absolute

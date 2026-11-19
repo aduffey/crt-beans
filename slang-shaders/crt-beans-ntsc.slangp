@@ -51,7 +51,6 @@ scale_type4 = source
 scale4 = 1.0
 
 shader5 = shaders/analog/ntsc_decode_chroma_filter.slang
-alias5 = Linearized
 filter_linear5 = false
 wrap_mode5 = clamp_to_border
 mipmap_input5 = false
@@ -119,7 +118,7 @@ scale12 = 1.0
 
 //======== Upscale the blurred texture.
 // Repeated bilinear upscales blur the texture a bit more, which is noticeable
-// with small blur sigmas. However, here are no blocky artifacts like we would
+// with small blur sigmas. However, there are no blocky artifacts like we would
 // get if we upscaled straight to the viewport size. The final upscale happens
 // in the composite pass.
 shader13 = shaders/bilinear_upsample.slang

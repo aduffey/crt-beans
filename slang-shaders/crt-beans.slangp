@@ -14,7 +14,6 @@ BlueNoiseTex_mipmap = false
 
 //======== Linearize gamma.
 shader0 = shaders/analog/linearize.slang
-alias0 = Linearized
 filter_linear0 = false
 mipmap_input0 = false
 scale_type0 = source
@@ -79,7 +78,7 @@ scale7 = 1.0
 
 //======== Upscale the blurred texture.
 // Repeated bilinear upscales blur the texture a bit more, which is noticeable
-// with small blur sigmas. However, here are no blocky artifacts like we would
+// with small blur sigmas. However, there are no blocky artifacts like we would
 // get if we upscaled straight to the viewport size. The final upscale happens
 // in the composite pass.
 shader8 = shaders/bilinear_upsample.slang

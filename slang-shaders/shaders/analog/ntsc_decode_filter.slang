@@ -10,7 +10,6 @@ layout(push_constant) uniform Push {
     vec4 SourceSize;
     vec4 OriginalSize;
     float System;
-    uint FrameCount;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
@@ -39,7 +38,7 @@ float hann_function(float x, float width_rcp) {
 }
 
 void main() {
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
 
     // Low-pass filter the chroma. We use a carrier-locked Hann window as our

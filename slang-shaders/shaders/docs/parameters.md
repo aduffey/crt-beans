@@ -16,7 +16,7 @@ These parameters control the size of the scanline (the bright part of the line).
 
 A maximum value of 1.0 will result in scanlines at maximum brightness being fully merged, with no dark area between them. Lower values will result in more defined scanlines. The value represents the full width at half maximum of the scanline in proportion to the distance between scanline centers.
 
-A minumum value of 1.0 will result in scanlines that do not vary with brightness. Lower values will result in darker lines being narrower than brighter lines (which is common on CRT TVs). The value is in proportion to the maximum spot size, so a value of 1.0 means the minimum width is the same as the maximum, a value of 0.4 means the minimum width is 40% of the maximum, etc.
+A minimum value of 1.0 will result in scanlines that do not vary with brightness. Lower values will result in darker lines being narrower than brighter lines (which is common on CRT TVs). The value is in proportion to the maximum spot size, so a value of 1.0 means the minimum width is the same as the maximum, a value of 0.4 means the minimum width is 40% of the maximum, etc.
 
 Note that the maximum spot size will affect the brightness of the overall image due to the dark gaps between the scanlines. A value of 1.0 will have no brightness cost, but a value of 0.9 will reduce the brightness by 10%, etc. The minimum spot size does not affect the overall image brightness.
 
@@ -110,8 +110,8 @@ All bandwidth values are in MHz.
 | --- | --- | --- | --- |
 | Video bandwidth | RGB | 4.0 | 0.6–6.0 |
 | Luma bandwidth | S-Video and NTSC | 4.0 | 0.6–6.0 |
-| Chroma bandwidth | S-Video | 1.2 | 0.6–1.6 |
-| Chroma bandwidth | NTSC | 1.2 | 0.6–6.0 |
+| Chroma bandwidth | S-Video | 1.0 | 0.6–1.6 |
+| Chroma bandwidth | NTSC | 1.0 | 0.6–6.0 |
 
 Video bandwidth applies the same filtering to all three RGB channels. Chroma bandwidth applies the same filtering to both color channels.
 

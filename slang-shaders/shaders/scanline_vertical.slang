@@ -10,18 +10,14 @@ layout(push_constant) uniform Push {
     vec4 SourceSize;
     vec4 OutputSize;
     uint FrameCount;
-    float MaxSpotSize;
-    float MinSpotSize;
     float InterlacingType;
     float OddFieldFirst;
-    float OverscanHorizontal;
     float OverscanVertical;
     float MaskType;
     float SubpixelMaskPattern;
     float SubpixelPattern;
     float DynamicMaskTriads;
     float MaskMitigation;
-    float OutputGamma;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT

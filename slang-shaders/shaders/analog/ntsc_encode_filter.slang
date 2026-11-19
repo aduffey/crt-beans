@@ -12,7 +12,6 @@ layout(push_constant) uniform Push {
     float LumaBandwidth;
     float ChromaBandwidth;
     float System;
-    uint FrameCount;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
@@ -40,7 +39,7 @@ layout(binding = 1) uniform sampler2D Source;
 void main() {
     // Systems may have different active line times, so we'll use that to
     // adjust the kernel size for the filter.
-    chroma_info ci = get_chroma_info(params.System, params.OriginalSize, params.FrameCount);
+    chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
     float active_line_micros = ci.periods_per_active_line / CHROMA_SUBCARRIER * 1e6;  // microseconds
     vec3 L = 1.0 / (vec3(params.LumaBandwidth, params.ChromaBandwidth, params.ChromaBandwidth) * active_line_micros * 2.0);
 

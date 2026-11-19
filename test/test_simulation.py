@@ -16,7 +16,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.samples, 1800)
         self.assertEqual(cfg.rgb_bandwidth, 4.0e6)
         self.assertEqual(cfg.luma_bandwidth, 4.0e6)
-        self.assertEqual(cfg.chroma_bandwidth, 1.2e6)
+        self.assertEqual(cfg.chroma_bandwidth, 1.0e6)
         self.assertEqual(cfg.ntsc_filter_type, 'adaptive')
         self.assertEqual(cfg.ntsc_luma_trap_depth, 0.0)
         self.assertEqual(cfg.ntsc_system, 'standard')
@@ -38,7 +38,7 @@ class TestSimulationConfig(unittest.TestCase):
             analog_type='svideo',
             rgb_bandwidth=3.5e6,
             luma_bandwidth=3.8e6,
-            chroma_bandwidth=1.0e6,
+            chroma_bandwidth=1.2e6,
             ntsc_filter_type='comb',
             ntsc_luma_trap_depth=16.0,
             ntsc_system='snes',
@@ -54,7 +54,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.analog_type, 'svideo')
         self.assertEqual(cfg.rgb_bandwidth, 3.5e6)
         self.assertEqual(cfg.luma_bandwidth, 3.8e6)
-        self.assertEqual(cfg.chroma_bandwidth, 1.0e6)
+        self.assertEqual(cfg.chroma_bandwidth, 1.2e6)
         self.assertEqual(cfg.ntsc_filter_type, 'comb')
         self.assertEqual(cfg.ntsc_luma_trap_depth, 16.0)
         self.assertEqual(cfg.ntsc_system, 'snes')
@@ -97,7 +97,7 @@ class TestAnalogSimulation(unittest.TestCase):
 
     def test_svideo(self):
         samples = 64
-        out = filtering.simulate_svideo(self.img, samples=samples, gamma=2.4, luma_bandwidth=4.0e6, chroma_bandwidth=1.2e6)
+        out = filtering.simulate_svideo(self.img, samples=samples, gamma=2.4, luma_bandwidth=4.0e6, chroma_bandwidth=1.0e6)
         self.assertEqual(out.shape, (24, samples, 3))
         self.assertTrue(np.all(np.isfinite(out)))
         self.assertTrue(np.all((out >= 0.0) & (out <= 1.0)))
@@ -116,7 +116,7 @@ class TestAnalogSimulation(unittest.TestCase):
                 samples=samples,
                 gamma=2.4,
                 luma_bandwidth=4.0e6,
-                chroma_bandwidth=1.2e6,
+                chroma_bandwidth=1.0e6,
                 ntsc_filter_type=filter_type,
                 ntsc_system='standard',
                 ntsc_frame_count=0,
@@ -848,7 +848,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.analog_type, 'rgb')
         self.assertEqual(args.rgb_bandwidth, 4.0e6)
         self.assertEqual(args.luma_bandwidth, 4.0e6)
-        self.assertEqual(args.chroma_bandwidth, 1.2e6)
+        self.assertEqual(args.chroma_bandwidth, 1.0e6)
         self.assertEqual(args.ntsc_filter_type, 'adaptive')
         self.assertEqual(args.ntsc_luma_trap_depth, 0.0)
         self.assertEqual(args.ntsc_system, 'standard')
@@ -869,7 +869,7 @@ class TestCLIParser(unittest.TestCase):
             '--analog-type', 'svideo',
             '--rgb-bandwidth', '3.5e6',
             '--luma-bandwidth', '3.8e6',
-            '--chroma-bandwidth', '1.0e6',
+            '--chroma-bandwidth', '1.2e6',
             '--ntsc-filter-type', 'comb',
             '--ntsc-luma-trap-depth', '32',
             '--ntsc-system', 'snes',
@@ -885,7 +885,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.analog_type, 'svideo')
         self.assertEqual(args.rgb_bandwidth, 3.5e6)
         self.assertEqual(args.luma_bandwidth, 3.8e6)
-        self.assertEqual(args.chroma_bandwidth, 1.0e6)
+        self.assertEqual(args.chroma_bandwidth, 1.2e6)
         self.assertEqual(args.ntsc_filter_type, 'comb')
         self.assertEqual(args.ntsc_luma_trap_depth, 32.0)
         self.assertEqual(args.ntsc_system, 'snes')
