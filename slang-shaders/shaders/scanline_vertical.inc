@@ -29,7 +29,7 @@ vec3 render_scanlines(vec2 vTexCoord, vec2 viewportCoord) {
     int source_height = int(params.SourceSize.y);
 
     vec3 value = vec3(0.0);
-    if (params.InterlacingType == 2.0 && params.SourceSize.y < 350) {
+    if (params.InterlacingType == 2.0 && params.SourceSize.y < 350.0) {
         // VGA line doubling
         lines_t lines = get_doubled_lines(vTexCoord.y, params.SourceSize);
         value = scanlines(lines, x, source_height);

@@ -40,13 +40,13 @@ void main() {
     // Overscan changes the aspect ratio and needs to be taken into account.
     delta = params.FinalViewportSize.x * params.FinalViewportSize.w *
             params.SourceSize.y * params.SourceSize.z *
-            (1 - params.OverscanVertical) / (1 - params.OverscanHorizontal);
+            (1.0 - params.OverscanVertical) / (1.0 - params.OverscanHorizontal);
 
     // Adjust delta if we're interlacing.
     if (params.InterlacingType <= 1.0 && params.SourceSize.y > 300.0) {
         // bob or weave
         delta = 0.5 * delta;
-    } else if (params.InterlacingType == 2.0 && params.SourceSize.y < 350) {
+    } else if (params.InterlacingType == 2.0 && params.SourceSize.y < 350.0) {
         // VGA line doubling
         delta = 2.0 * delta;
     }

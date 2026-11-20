@@ -112,7 +112,7 @@ chroma_info chroma_info_genesis(vec4 original_size) {
 
     float periods_per_active_line;
     // TODO handle if upscaled
-    if (original_size.x > 300) { // H40
+    if (original_size.x > 300.0) { // H40
         periods_per_active_line = 8.0 / 15.0 * original_size.x;
     } else { // H32
         periods_per_active_line = 10.0 / 15.0 * original_size.x;
@@ -140,7 +140,7 @@ chroma_info chroma_info_snes(vec4 original_size) {
 
     // Default to 512 px mode.
     float periods_per_active_line = 2.0 / 6.0 * original_size.x;
-    if (original_size.x < 300) { // 256 px mode
+    if (original_size.x < 300.0) { // 256 px mode
         periods_per_active_line = 4.0 / 6.0 * original_size.x;
     }
     return chroma_info(periods_per_active_line, 682.0 / 3.0, 1.0 / 3.0);
@@ -170,11 +170,11 @@ chroma_info chroma_info_saturn(vec4 original_size) {
     // These bounds should work for most Saturn cores.
     // Default to 704 px mode.
     float periods_per_active_line = original_size.x / 4.0;
-    if (original_size.x < 340) { // 320px mode
+    if (original_size.x < 340.0) { // 320px mode
         periods_per_active_line = 65.0 / (2.0 * 61.0) * original_size.x;
-    } else if (original_size.x < 400) { // 352px mode
+    } else if (original_size.x < 400.0) { // 352px mode
         periods_per_active_line = original_size.x / 2.0;
-    } else if (original_size.x < 680) { // 640px mode
+    } else if (original_size.x < 680.0) { // 640px mode
         periods_per_active_line = 65.0 / (4.0 * 61.0) * original_size.x;
     }
     return chroma_info(periods_per_active_line, 227.5, 0.5);
@@ -238,7 +238,7 @@ chroma_info chroma_info_n64() {
     // We will assume that the input is the full 640 pixel width. The N64
     // framebuffer is always 640 pixels. This should be fine for upscaled
     // content as well, as long as the full framebuffer is used.
-    float periods_per_active_line = (640 * 227.5) / 773.5;
+    float periods_per_active_line = (640.0 * 227.5) / 773.5;
     return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
 
