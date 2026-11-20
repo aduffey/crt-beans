@@ -29,15 +29,16 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
     float x = coord.x * output_size.x;
     vec3 mask = vec3(1.0);
     float mask_coverage = 1.0;
-    if (subpixel_pattern == 0.0) { // RGB subpixels
-        if (pixels_per_triad == 2.0) { // <=1080p
+    int triad_pixels = int(round(pixels_per_triad));
+    if (subpixel_pattern < 0.5) { // RGB subpixels
+        if (triad_pixels == 2) { // <=1080p
             vec3[2] mask_tile = {
                     vec3(1.0, 0.0, 1.0),
                     vec3(0.0, 1.0, 0.0)
                 };
             mask = mask_tile[int(mod(x, 2.0))];
             mask_coverage = 2.0;
-        } else if (pixels_per_triad == 3.0) { // 1080p/1440p
+        } else if (triad_pixels == 3) { // 1080p/1440p
             vec3[3] mask_tile = {
                     vec3(0.0, 0.0, 1.0),
                     vec3(0.0, 1.0, 0.0),
@@ -45,7 +46,7 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
                 };
             mask = mask_tile[int(mod(x, 3.0))];
             mask_coverage = 3.0;
-        } else if (pixels_per_triad == 4.0) { // 1440p/4k
+        } else if (triad_pixels == 4) { // 1440p/4k
             vec3[4] mask_tile = {
                     vec3(1.0, 0.0, 0.0),
                     vec3(1.0, 1.0, 0.0),
@@ -54,7 +55,7 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
                 };
             mask = mask_tile[int(mod(x, 4.0))];
             mask_coverage = 2.0;
-        } else if (pixels_per_triad == 5.0) { // 4k, lower TVL
+        } else if (triad_pixels == 5) { // 4k, lower TVL
             vec3[5] mask_tile = {
                     vec3(1.0, 0.0, 0.0),
                     vec3(1.0, 0.0, 1.0),
@@ -66,14 +67,14 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
             mask_coverage = 15.0 / 6.0;
         }
     } else { // BGR subpixels, same as above but red and blue values transposed
-        if (pixels_per_triad == 2.0) { // <=1080p
+        if (triad_pixels == 2) { // <=1080p
             vec3[2] mask_tile = {
                     vec3(1.0, 0.0, 1.0),
                     vec3(0.0, 1.0, 0.0)
                 };
             mask = mask_tile[int(mod(x, 2.0))];
             mask_coverage = 2.0;
-        } else if (pixels_per_triad == 3.0) { // 1080p/1440p
+        } else if (triad_pixels == 3) { // 1080p/1440p
             vec3[3] mask_tile = {
                     vec3(1.0, 0.0, 0.0),
                     vec3(0.0, 1.0, 0.0),
@@ -81,7 +82,7 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
                 };
             mask = mask_tile[int(mod(x, 3.0))];
             mask_coverage = 3.0;
-        } else if (pixels_per_triad == 4.0) { // 1440p/4k
+        } else if (triad_pixels == 4) { // 1440p/4k
             vec3[4] mask_tile = {
                     vec3(0.0, 0.0, 1.0),
                     vec3(0.0, 1.0, 1.0),
@@ -90,7 +91,7 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
                 };
             mask = mask_tile[int(mod(x, 4.0))];
             mask_coverage = 2.0;
-        } else if (pixels_per_triad == 5.0) { // 4k, lower TVL
+        } else if (triad_pixels == 5) { // 4k, lower TVL
             vec3[5] mask_tile = {
                     vec3(0.0, 0.0, 1.0),
                     vec3(1.0, 0.0, 1.0),
@@ -222,6 +223,11 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
 // Returns:
 //     A vec3 with the rgb value of this pixel after applying the mask.
 vec3 blend_mask(vec3 mask, vec3 pixel_value, float mask_coverage, float mitigation) {
+    // Avoid divisions by zero and return early if we don't need to blend.
+    if (mask_coverage <= 1.0 + 1.0e-5) {
+        return pixel_value;
+    }
+
     // Adjust the pixel value based on the mask strength. We want the strength
     // to range from 1 / mask_coverage (which will result in a pure mask with
     // no brightness loss mitigation) to 1.0 (which will result in full

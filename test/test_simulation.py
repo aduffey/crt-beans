@@ -770,6 +770,30 @@ class TestMaskTypes(unittest.TestCase):
         blended_cov1 = masking.blend_mask(mask, pixel_val, 1.0, mitigation=1.0)
         np.testing.assert_allclose(blended_cov1, pixel_val, atol=1e-5)
 
+        import taichi as ti
+        import taichi.math as tm
+
+        @ti.kernel
+        def eval_blend_taichi(cov: float, mit: float) -> tm.vec3:
+            return masking.blend_mask_taichi(
+                tm.vec3(1.0, 0.0, 0.0), tm.vec3(0.6, 0.6, 0.6), cov, mit,
+            )
+
+        for cov in (0.0, 1.0, 1.0 + 1e-7):
+            with self.subTest(taichi_cov=cov):
+                res = np.array(eval_blend_taichi(cov, 1.0), dtype=np.float32)
+                self.assertTrue(np.all(np.isfinite(res)))
+                np.testing.assert_allclose(res, [0.6, 0.6, 0.6], atol=1e-5)
+
+        res_cov3 = np.array(eval_blend_taichi(3.0, 1.0), dtype=np.float32)
+        expected_cov3 = masking.blend_mask(
+            np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            np.array([0.6, 0.6, 0.6], dtype=np.float32),
+            3.0,
+            mitigation=1.0,
+        )
+        np.testing.assert_allclose(res_cov3, expected_cov3, atol=1e-5)
+
     def test_mask_amount(self):
         out_mit_full = masking.apply_mask(self.img, 'bandlimit', 1, 'slot', 550.0, 1.0)
         out_mit_zero = masking.apply_mask(self.img, 'bandlimit', 1, 'slot', 550.0, 0.0)

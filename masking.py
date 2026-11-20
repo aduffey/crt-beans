@@ -48,11 +48,14 @@ def blend_mask(
 def blend_mask_taichi(
     mask: tm.vec3, pixel_value: tm.vec3, mask_coverage: float, mitigation: float
 ) -> tm.vec3:
-    strength = tm.mix(1.0 / mask_coverage, 1.0, mitigation)
-    v = pixel_value * strength
-    a = tm.min((v - 1.0) / (1.0 - mask_coverage), v)
-    b = tm.max((1.0 - mask_coverage * v) / (1.0 - mask_coverage), tm.vec3(0.0))
-    return mask_coverage * a * mask + b
+    result = pixel_value
+    if mask_coverage > 1.0 + 1.0e-5:
+        strength = tm.mix(1.0 / mask_coverage, 1.0, mitigation)
+        v = pixel_value * strength
+        a = tm.min((v - 1.0) / (1.0 - mask_coverage), v)
+        b = tm.max((1.0 - mask_coverage * v) / (1.0 - mask_coverage), tm.vec3(0.0))
+        result = mask_coverage * a * mask + b
+    return result
 
 
 def generate_subpixel_mask(shape: tuple[int, ...], mask_pattern: int) -> tuple[np.ndarray, float]:
