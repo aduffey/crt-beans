@@ -61,19 +61,18 @@ def get_lines_doubled(v: float, source_y: float) -> tm.vec4:
 def spot_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                   overscan_horizontal: float, overscan_vertical: float,
                   interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
-    (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     taichi_spot_fragment(field_in, field_out, max_spot_size, min_spot_size,
                          overscan_horizontal, overscan_vertical,
                          interlace_mode, odd_field_first, frame_count)
-    return field_out.to_numpy()
+    return field_out
 
 
 @ti.kernel
-def _kernel_spot_fragment(field_in: ti.template(), field_out: ti.template(),
+def _kernel_spot_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                          field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                           max_spot_size: float, min_spot_size: float,
                           overscan_horizontal: float, overscan_vertical: float,
                           interlace_mode: int, odd_field_first: int, frame_count: int):
@@ -100,7 +99,7 @@ def taichi_spot_fragment(field_in, field_out, max_spot_size: float, min_spot_siz
 
 
 @ti.func
-def evaluate_spot_sampled(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, delta: float, lines: tm.vec4,
+def evaluate_spot_sampled(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, delta: float, lines: tm.vec4,
                           max_spot_size: float, min_spot_size: float) -> tm.vec3:
     upper_sample_y = int(lines.x)
     lower_sample_y = int(lines.y)
@@ -119,7 +118,7 @@ def evaluate_spot_sampled(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, delta: f
 
 
 @ti.func
-def spot_sim(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
              max_spot_size: float, min_spot_size: float,
              overscan_horizontal: float, overscan_vertical: float,
              interlace_mode: int, odd_field_first: int, frame_count: int) -> tm.vec3:
@@ -180,7 +179,7 @@ def spot3(sample, distance_x, distance_y, max_spot_size: float, min_spot_size: f
 
 
 @ti.func
-def spot_sim_gauss(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_gauss(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                    max_spot_size: float, min_spot_size: float,
                    overscan_horizontal: float, overscan_vertical: float) -> tm.vec3:
     # Overscan
@@ -217,7 +216,7 @@ def spot_sim_gauss(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.
 
 
 @ti.func
-def spot_sim_gauss4(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_gauss4(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                     max_spot_size: float, min_spot_size: float,
                     overscan_horizontal: float, overscan_vertical: float) -> tm.vec3:
     # Overscan
@@ -259,7 +258,7 @@ def spot_sim_gauss4(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm
 
 
 @ti.func
-def spot_sim_gauss5(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_gauss5(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                     max_spot_size: float, min_spot_size: float,
                     overscan_horizontal: float, overscan_vertical: float) -> tm.vec3:
     # Overscan
@@ -313,19 +312,18 @@ def spot_gauss(sample, distance_x, distance_y, max_spot_size: float, min_spot_si
 def spot_analytical_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                              overscan_horizontal: float, overscan_vertical: float,
                              interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
-    (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     taichi_spot_analytical_fragment(field_in, field_out, max_spot_size, min_spot_size,
                                     overscan_horizontal, overscan_vertical,
                                     interlace_mode, odd_field_first, frame_count)
-    return field_out.to_numpy()
+    return field_out
 
 
 @ti.kernel
-def _kernel_spot_analytical_fragment(field_in: ti.template(), field_out: ti.template(),
+def _kernel_spot_analytical_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                      field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                                       max_spot_size: float, min_spot_size: float,
                                       overscan_horizontal: float, overscan_vertical: float,
                                       interlace_mode: int, odd_field_first: int, frame_count: int):
@@ -352,7 +350,7 @@ def taichi_spot_analytical_fragment(field_in, field_out, max_spot_size: float, m
 
 
 @ti.func
-def evaluate_spot_analytical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, delta: float, lines: tm.vec4,
+def evaluate_spot_analytical(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, delta: float, lines: tm.vec4,
                              max_spot_size: float, min_spot_size: float) -> tm.vec3:
     upper_sample_y = int(lines.x)
     lower_sample_y = int(lines.y)
@@ -373,7 +371,7 @@ def evaluate_spot_analytical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, delta
 
 
 @ti.func
-def spot_sim_analytical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_analytical(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                         max_spot_size: float, min_spot_size: float,
                         overscan_horizontal: float, overscan_vertical: float,
                         interlace_mode: int, odd_field_first: int, frame_count: int) -> tm.vec3:
@@ -439,22 +437,22 @@ def spot_fast_fragment(image_in, output_dim, max_spot_size: float, min_spot_size
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
     aspect_ratio = float(out_width) / float(out_height)
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    field_intermediate = ti.Vector.field(n=3, dtype=float, shape=(in_height, out_width))
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_intermediate = np.empty((in_height, out_width, 3), dtype=np.float32)
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
 
     taichi_spot_fast_horizontal_fragment(field_in, field_intermediate, max_spot_size, min_spot_size,
                                          overscan_horizontal, overscan_vertical, aspect_ratio, interlace_mode)
-    imwrite("intermediate.png", linear_to_srgb(field_intermediate.to_numpy()))
+    imwrite("intermediate.png", linear_to_srgb(field_intermediate))
     taichi_spot_fast_vertical_fragment(field_intermediate, field_out, max_spot_size, min_spot_size,
                                        overscan_horizontal, overscan_vertical,
                                        interlace_mode, odd_field_first, frame_count)
-    return field_out.to_numpy()
+    return field_out
 
 
 @ti.kernel
-def _kernel_spot_fast_horizontal_fragment(field_in: ti.template(), field_out: ti.template(),
+def _kernel_spot_fast_horizontal_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                          field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                                           max_spot_size: float, min_spot_size: float,
                                           overscan_horizontal: float, overscan_vertical: float,
                                           aspect_ratio: float, interlace_mode: int):
@@ -484,7 +482,8 @@ def taichi_spot_fast_horizontal_fragment(field_in, field_out, max_spot_size: flo
 
 
 @ti.kernel
-def _kernel_spot_fast_vertical_fragment(field_in: ti.template(), field_out: ti.template(),
+def _kernel_spot_fast_vertical_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                        field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                                         max_spot_size: float, min_spot_size: float,
                                         overscan_horizontal: float, overscan_vertical: float,
                                         interlace_mode: int, odd_field_first: int, frame_count: int):
@@ -512,7 +511,7 @@ def taichi_spot_fast_vertical_fragment(field_in, field_out, max_spot_size: float
 
 
 @ti.func
-def evaluate_spot_fast(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, lines: tm.vec4,
+def evaluate_spot_fast(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, lines: tm.vec4,
                        max_spot_size: float, min_spot_size: float) -> tm.vec3:
     upper_sample_y = int(lines.x)
     lower_sample_y = int(lines.y)
@@ -527,7 +526,7 @@ def evaluate_spot_fast(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, lines: tm.v
 
 
 @ti.func
-def spot_sim_fast_vertical(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_fast_vertical(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                            max_spot_size: float, min_spot_size: float,
                            overscan_horizontal: float, overscan_vertical: float,
                            interlace_mode: int, odd_field_first: int, frame_count: int) -> tm.vec3:
@@ -574,7 +573,7 @@ def spot_fast_vertical(sample: tm.vec3, y_: float, max_spot_size: float, min_spo
 
 
 @ti.func
-def spot_sim_f16(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_f16(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                  max_spot_size: float, min_spot_size: float,
                  overscan_horizontal: float, overscan_vertical: float) -> tm.vec3:
     # Overscan
@@ -619,26 +618,27 @@ def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_siz
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
     aspect_ratio = float(out_width) / float(out_height)
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    energy_intermediate = ti.Vector.field(n=3, dtype=float, shape=(in_height, out_width))
-    width_intermediate = ti.Vector.field(n=3, dtype=float, shape=(in_height, out_width))
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    energy_intermediate = np.empty((in_height, out_width, 3), dtype=np.float32)
+    width_intermediate = np.empty((in_height, out_width, 3), dtype=np.float32)
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
 
     taichi_spot_fast2_horizontal_fragment(field_in, energy_intermediate, width_intermediate,
                                           max_spot_size, min_spot_size,
                                           overscan_horizontal, overscan_vertical, aspect_ratio,
                                           interlace_mode, cubic_horizontal, force_zoh)
-    imwrite("intermediate.png", linear_to_srgb(energy_intermediate.to_numpy()))
+    imwrite("intermediate.png", linear_to_srgb(energy_intermediate))
     taichi_spot_fast2_vertical_fragment(energy_intermediate, width_intermediate, field_out,
                                         max_spot_size, min_spot_size,
                                         overscan_horizontal, overscan_vertical,
                                         interlace_mode, odd_field_first, frame_count, cubic_vertical)
-    return field_out.to_numpy()
+    return field_out
 
 
 @ti.kernel
-def _kernel_spot_fast2_horizontal_fragment(field_in: ti.template(), energy_out: ti.template(), width_out: ti.template(),
+def _kernel_spot_fast2_horizontal_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                           energy_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                           width_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                                            max_spot_size: float, min_spot_size: float,
                                            overscan_horizontal: float, overscan_vertical: float,
                                            aspect_ratio: float, interlace_mode: int,
@@ -675,7 +675,9 @@ def taichi_spot_fast2_horizontal_fragment(field_in, energy_out, width_out,
 
 
 @ti.kernel
-def _kernel_spot_fast2_vertical_fragment(energy_in: ti.template(), width_in: ti.template(), field_out: ti.template(),
+def _kernel_spot_fast2_vertical_fragment(energy_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                         width_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                                         field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                                          max_spot_size: float, min_spot_size: float,
                                          overscan_horizontal: float, overscan_vertical: float,
                                          interlace_mode: int, odd_field_first: int, frame_count: int,
@@ -707,7 +709,7 @@ def taichi_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
 
 
 @ti.func
-def spot_sim_fast2_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
+def spot_sim_fast2_horizontal(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
                               max_spot_size: float, min_spot_size: float,
                               cubic_horizontal: ti.template() = True,
                               force_zoh: ti.template() = False) -> tm.vec3:
@@ -758,7 +760,7 @@ def spot_sim_fast2_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, Outp
 
 
 @ti.func
-def spot_sim_fast3_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
+def spot_sim_fast3_horizontal(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
                               max_spot_size: float, min_spot_size: float) -> tm.vec3:
     sample_y = int(vTexCoord.y * SourceSize.y)
     energy = tm.vec3(0.0)
@@ -778,7 +780,7 @@ def spot_sim_fast3_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, Outp
 
 
 @ti.func
-def spot_sim_fast4_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
+def spot_sim_fast4_horizontal(vTexCoord: tm.vec2, img: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4, delta: float,
                               max_spot_size: float, min_spot_size: float) -> tm.vec3:
     sample_y = int(vTexCoord.y * SourceSize.y)
     energy = tm.vec3(0.0)
@@ -798,7 +800,7 @@ def spot_sim_fast4_horizontal(vTexCoord: tm.vec2, img, SourceSize: tm.vec4, Outp
 
 
 @ti.func
-def evaluate_spot_fast2(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4, lines: tm.vec4,
+def evaluate_spot_fast2(vTexCoord: tm.vec2, img: ti.template(), widths: ti.template(), SourceSize: tm.vec4, lines: tm.vec4,
                         max_spot_size: float, min_spot_size: float,
                         cubic_vertical: ti.template() = True) -> tm.vec3:
     upper_sample_y = int(lines.x)
@@ -827,7 +829,7 @@ def evaluate_spot_fast2(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4, li
 
 
 @ti.func
-def spot_sim_fast2_vertical(vTexCoord: tm.vec2, img, widths, SourceSize: tm.vec4, OutputSize: tm.vec4,
+def spot_sim_fast2_vertical(vTexCoord: tm.vec2, img: ti.template(), widths: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                             max_spot_size: float, min_spot_size: float,
                             overscan_horizontal: float, overscan_vertical: float,
                             interlace_mode: int, odd_field_first: int, frame_count: int,

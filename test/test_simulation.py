@@ -676,13 +676,10 @@ class TestScanlineMethods(unittest.TestCase):
             img = np.full((height, 8, 3), 0.1, dtype=np.float32)
             img[::2] = 0.8
             out_dim = (height * 2, 16, 3)
-            # Reuse fields across modes/phases to avoid accumulating Taichi
-            # field trees for every render in the full suite.
-            field_in = spot_sim.ti.Vector.field(n=3, dtype=float, shape=img.shape[:2])
-            field_in.from_numpy(img)
-            field_out = spot_sim.ti.Vector.field(n=3, dtype=float, shape=out_dim[:2])
-            energy = spot_sim.ti.Vector.field(n=3, dtype=float, shape=(height, 16))
-            width = spot_sim.ti.Vector.field(n=3, dtype=float, shape=(height, 16))
+            field_in = np.ascontiguousarray(img, dtype=np.float32)
+            field_out = np.empty(out_dim, dtype=np.float32)
+            energy = np.empty((height, 16, 3), dtype=np.float32)
+            width = np.empty((height, 16, 3), dtype=np.float32)
 
             def render(method, mode, frame=0, odd_first=1):
                 if method == 'fast':
@@ -699,7 +696,7 @@ class TestScanlineMethods(unittest.TestCase):
                                 else spot_sim.taichi_spot_analytical_fragment)
                     fragment(field_in, field_out, 0.9, 0.4, 0.0, 0.0,
                              mode, odd_first, frame)
-                return field_out.to_numpy()
+                return field_out.copy()
 
             for method in ['sampled', 'analytical', 'fast']:
                 with self.subTest(height=height, method=method):

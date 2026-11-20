@@ -1,12 +1,8 @@
 import contextlib
 import io
-from pathlib import Path
-import subprocess
-import sys
 import unittest
 
 import numpy as np
-import taichi as ti
 import taichi.math as tm
 
 import sim_taichi
@@ -39,20 +35,12 @@ class TestLumaTrap(unittest.TestCase):
             1.0 / (2.0 * 1.2e6 * active_time),
         )
         strength = filtering.luma_trap_strength(depth)
-        source = ti.Vector.field(3, dtype=ti.f32)
-        filtered = ti.Vector.field(3, dtype=ti.f32)
-        output = ti.Vector.field(3, dtype=ti.f32)
-        builder = ti.FieldsBuilder()
-        builder.dense(ti.ij, image.shape[:2]).place(source)
-        builder.dense(ti.ij, (image.shape[0], samples)).place(filtered, output)
-        tree = builder.finalize()
-        try:
-            source.from_numpy(image.astype(np.float32))
-            filtering.taichi_filter_fragment(source, filtered, L)
-            filtering.taichi_luma_trap_fragment(filtered, output, periods, strength)
-            return output.to_numpy()
-        finally:
-            tree.destroy()
+        source = np.ascontiguousarray(image, dtype=np.float32)
+        filtered = np.empty((image.shape[0], samples, 3), dtype=np.float32)
+        output = np.empty_like(filtered)
+        filtering.taichi_filter_fragment(source, filtered, L)
+        filtering.taichi_luma_trap_fragment(filtered, output, periods, strength)
+        return output
 
     def test_depth_range(self):
         for depth in (-1.0, 32.01, np.nan, np.inf, -np.inf):
@@ -71,32 +59,24 @@ class TestLumaTrap(unittest.TestCase):
         center = samples // 2
         impulse = np.zeros((1, samples, 3), dtype=np.float32)
         impulse[0, center, 0] = 1.0
-        source = ti.Vector.field(3, dtype=ti.f32)
-        output = ti.Vector.field(3, dtype=ti.f32)
-        builder = ti.FieldsBuilder()
-        builder.dense(ti.ij, (1, samples)).place(source, output)
-        tree = builder.finalize()
-        try:
-            source.from_numpy(impulse)
-            for periods in (filtering.chroma_info_standard().periods_per_active_line,
-                            filtering.chroma_info_nes(256).periods_per_active_line):
-                with self.subTest(periods=periods):
-                    strength = filtering.luma_trap_strength(32.0)
-                    filtering.taichi_luma_trap_fragment(source, output, periods, strength)
-                    response = output.to_numpy()[0, :, 0]
-                    radius = int(np.floor(3.0 * samples / periods))
-                    self.assertTrue(np.all(np.isfinite(response)))
-                    np.testing.assert_allclose(
-                        response[center - radius:center + radius + 1],
-                        response[center - radius:center + radius + 1][::-1],
-                        atol=2e-7, rtol=0,
-                    )
-                    np.testing.assert_array_equal(response[:center - radius], 0.0)
-                    np.testing.assert_array_equal(response[center + radius + 1:], 0.0)
-            filtering.taichi_luma_trap_fragment(source, output, periods, 0.0)
-            np.testing.assert_array_equal(output.to_numpy(), impulse)
-        finally:
-            tree.destroy()
+        output = np.empty_like(impulse)
+        for periods in (filtering.chroma_info_standard().periods_per_active_line,
+                        filtering.chroma_info_nes(256).periods_per_active_line):
+            with self.subTest(periods=periods):
+                strength = filtering.luma_trap_strength(32.0)
+                filtering.taichi_luma_trap_fragment(impulse, output, periods, strength)
+                response = output[0, :, 0]
+                radius = int(np.floor(3.0 * samples / periods))
+                self.assertTrue(np.all(np.isfinite(response)))
+                np.testing.assert_allclose(
+                    response[center - radius:center + radius + 1],
+                    response[center - radius:center + radius + 1][::-1],
+                    atol=2e-7, rtol=0,
+                )
+                np.testing.assert_array_equal(response[:center - radius], 0.0)
+                np.testing.assert_array_equal(response[center + radius + 1:], 0.0)
+        filtering.taichi_luma_trap_fragment(impulse, output, periods, 0.0)
+        np.testing.assert_array_equal(output, impulse)
 
     def test_flat_color_and_chroma_are_preserved(self):
         image = np.empty((2, 320, 3), dtype=np.float32)
@@ -157,17 +137,8 @@ class TestLumaTrap(unittest.TestCase):
         for label, samples, periods in cases:
             with self.subTest(case=label):
                 yuv = rng.uniform(0.1, 0.9, (2, samples, 3)).astype(np.float32)
-                source = ti.Vector.field(3, dtype=ti.f32)
-                output = ti.Vector.field(3, dtype=ti.f32)
-                builder = ti.FieldsBuilder()
-                builder.dense(ti.ij, (2, samples)).place(source, output)
-                tree = builder.finalize()
-                try:
-                    source.from_numpy(yuv)
-                    filtering.taichi_luma_trap_fragment(source, output, periods, strength)
-                    result = output.to_numpy()
-                finally:
-                    tree.destroy()
+                result = np.empty_like(yuv)
+                filtering.taichi_luma_trap_fragment(yuv, result, periods, strength)
                 self.assertTrue(np.all(np.isfinite(result)))
                 np.testing.assert_array_equal(result, yuv)
 
@@ -177,17 +148,8 @@ class TestLumaTrap(unittest.TestCase):
         yuv = np.zeros((1, samples, 3), dtype=np.float32)
         yuv[0, ::2, 0] = 0.8
         yuv[0, 1::2, 0] = 0.2
-        source = ti.Vector.field(3, dtype=ti.f32)
-        output = ti.Vector.field(3, dtype=ti.f32)
-        builder = ti.FieldsBuilder()
-        builder.dense(ti.ij, (1, samples)).place(source, output)
-        tree = builder.finalize()
-        try:
-            source.from_numpy(yuv)
-            filtering.taichi_luma_trap_fragment(source, output, periods, strength)
-            result = output.to_numpy()
-        finally:
-            tree.destroy()
+        result = np.empty_like(yuv)
+        filtering.taichi_luma_trap_fragment(yuv, result, periods, strength)
         self.assertTrue(np.all(np.isfinite(result)))
         self.assertLess(float(np.std(result[0, 20:-20, 0])), 0.02)
 
@@ -207,23 +169,6 @@ class TestLumaTrap(unittest.TestCase):
             with self.subTest(value=value):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     parser.parse_args(['in.png', 'out.png', '--ntsc-luma-trap-depth', value])
-
-
-def run_isolated_luma_trap_tests():
-    # Compiled Taichi field metadata outlives explicit tree cleanup. Keep the
-    # new cases in a separate runtime so discovery does not exhaust the
-    # field-tree limit in the existing large simulation suite.
-    result = subprocess.run(
-        [sys.executable, '-m', 'unittest', 'test.test_luma_trap.TestLumaTrap'],
-        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        raise AssertionError(result.stdout + result.stderr)
-
-
-def load_tests(loader, tests, pattern):
-    return unittest.TestSuite([unittest.FunctionTestCase(run_isolated_luma_trap_tests)])
 
 
 if __name__ == '__main__':

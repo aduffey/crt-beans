@@ -10,17 +10,20 @@ def box_blur(image_in, radius: int):
     This is a very fast blur for large images. The speed is not
     dependent on the radius."""
     (in_height, in_width, in_planes) = image_in.shape
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_width, in_height))
+    field_in = np.array(image_in, dtype=np.float32, copy=True, order='C')
+    field_out = np.empty((in_width, in_height, 3), dtype=np.float32)
     for i in range(4):
         taichi_box_blur(field_in, field_out, radius)
         taichi_box_blur(field_out, field_in, radius)
-    return field_in.to_numpy()
+    return field_in
 
 
 @ti.kernel
-def taichi_box_blur(field_in: ti.template(), field_out: ti.template(), radius: int):
+def taichi_box_blur(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    radius: int,
+):
     """Do a 1D horizontal box blur on field_in, writing the transposed result to field_out"""
     (in_height, in_width) = field_in.shape
     width = 2 * radius + 1
@@ -44,16 +47,19 @@ def taichi_box_blur(field_in: ti.template(), field_out: ti.template(), radius: i
 
 def gaussian_blur(image_in, sigma: float):
     (in_height, in_width, in_planes) = image_in.shape
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(in_width, in_height))
+    field_in = np.array(image_in, dtype=np.float32, copy=True, order='C')
+    field_out = np.empty((in_width, in_height, 3), dtype=np.float32)
     gaussian_fragment(field_in, field_out, sigma)
     gaussian_fragment(field_out, field_in, sigma)
-    return field_in.to_numpy()
+    return field_in
 
 
 @ti.kernel
-def gaussian_fragment(field_in: ti.template(), field_out: ti.template(), sigma: float):
+def gaussian_fragment(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    sigma: float,
+):
     (in_height, in_width) = field_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
@@ -65,7 +71,7 @@ def gaussian_fragment(field_in: ti.template(), field_out: ti.template(), sigma: 
 
 
 @ti.func
-def gaussian_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4, sigma: float) -> tm.vec3:
+def gaussian_taichi(vTexCoord: tm.vec2, Source: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4, sigma: float) -> tm.vec3:
     pos = vTexCoord.yx * SourceSize.xy
     weight_sum = 0.0
     value = tm.vec3(0.0)

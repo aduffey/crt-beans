@@ -228,17 +228,19 @@ def yuv_to_linear_taichi(yuv: tm.vec3, gamma: float) -> tm.vec3:
 
 
 def filter_fragment(image_in, output_dim, L: tm.vec3):
-    (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(in_height, in_width))
-    field_in.from_numpy(image_in)
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     taichi_filter_fragment(field_in, field_out, L)
-    return field_out.to_numpy()
+    return field_out
 
 
 @ti.kernel
-def taichi_filter_fragment(field_in: ti.template(), field_out: ti.template(), L: tm.vec3):
+def taichi_filter_fragment(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    L: tm.vec3,
+):
     (in_height, in_width) = field_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
@@ -249,7 +251,7 @@ def taichi_filter_fragment(field_in: ti.template(), field_out: ti.template(), L:
 
 
 @ti.func
-def filter_sim(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, L: tm.vec3) -> tm.vec3:
+def filter_sim(vTexCoord: tm.vec2, Source: ti.template(), SourceSize: tm.vec4, L: tm.vec3) -> tm.vec3:
     max_L = tm.max(tm.max(L.r, L.g), L.b)
     L_rcp = 1.0 / L
 
@@ -270,7 +272,7 @@ def filter_sim(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, L: tm.vec3) -> t
 
 
 @ti.func
-def filter_sim2(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, L: tm.vec3) -> tm.vec3:
+def filter_sim2(vTexCoord: tm.vec2, Source: ti.template(), SourceSize: tm.vec4, L: tm.vec3) -> tm.vec3:
     max_L = tm.max(tm.max(L.r, L.g), L.b)
 
     filtered = tm.vec3(0.0)
@@ -335,8 +337,8 @@ def luma_trap_sample(
 
 @ti.kernel
 def taichi_luma_trap_fragment(
-    field_in: ti.template(),
-    field_out: ti.template(),
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
     periods_per_active_line: float,
     strength: float,
 ):
@@ -351,8 +353,8 @@ def taichi_luma_trap_fragment(
 
 @ti.kernel
 def taichi_ntsc_encode_modulate(
-    field_yuv: ti.template(),
-    field_composite: ti.template(),
+    field_yuv: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_composite: ti.types.ndarray(dtype=ti.f32, ndim=2),
     frame_count: int,
     periods_per_active_line: float,
     periods_per_line: float,
@@ -374,8 +376,8 @@ def taichi_ntsc_encode_modulate(
 
 @ti.kernel
 def taichi_ntsc_decode_demodulate(
-    field_composite: ti.template(),
-    field_demod: ti.template(),
+    field_composite: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    field_demod: ti.types.ndarray(dtype=tm.vec3, ndim=2),
     frame_count: int,
     periods_per_active_line: float,
     periods_per_line: float,
@@ -395,8 +397,8 @@ def taichi_ntsc_decode_demodulate(
 
 @ti.kernel
 def taichi_ntsc_decode_filter(
-    field_in: ti.template(),
-    field_out: ti.template(),
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec4, ndim=2),
     chroma_filter_width: float,
 ):
     (height, samples) = field_in.shape
@@ -424,8 +426,8 @@ def taichi_ntsc_decode_filter(
 
 @ti.kernel
 def taichi_ntsc_decode_comb(
-    field_in: ti.template(),
-    field_out: ti.template(),
+    field_in: ti.types.ndarray(dtype=tm.vec4, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
     filter_type: float,
     frame_count: int,
     periods_per_active_line: float,
@@ -573,8 +575,8 @@ def lanczos3(x: float) -> float:
 
 @ti.kernel
 def taichi_ntsc_decode_chroma_filter(
-    field_in: ti.template(),
-    field_out: ti.template(),
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
     chroma_filter_width: float,
     gamma: float,
 ):
@@ -631,12 +633,11 @@ def simulate_rgb(
     L_val = 1.0 / (rgb_bandwidth * ACTIVE_LINE_TIME * 2.0)
     L = tm.vec3(L_val, L_val, L_val)
 
-    field_in = ti.Vector.field(3, dtype=float, shape=(in_h, in_w))
-    field_in.from_numpy(image_in)
-    field_out = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_out = np.empty((in_h, samples, 3), dtype=np.float32)
     taichi_filter_fragment(field_in, field_out, L)
 
-    return gamma_to_linear(field_out.to_numpy(), gamma)
+    return gamma_to_linear(field_out, gamma)
 
 
 def simulate_svideo(
@@ -656,12 +657,11 @@ def simulate_svideo(
         1.0 / (chroma_bandwidth * ACTIVE_LINE_TIME * 2.0),
     )
 
-    field_in = ti.Vector.field(3, dtype=float, shape=(in_h, in_w))
-    field_in.from_numpy(yuv_in)
-    field_out = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    field_in = np.ascontiguousarray(yuv_in, dtype=np.float32)
+    field_out = np.empty((in_h, samples, 3), dtype=np.float32)
     taichi_filter_fragment(field_in, field_out, L)
 
-    return yuv_to_linear(field_out.to_numpy(), gamma)
+    return yuv_to_linear(field_out, gamma)
 
 
 def simulate_ntsc(
@@ -697,13 +697,12 @@ def simulate_ntsc(
     odd_field_first_flag = 1 if odd_field_first else 0
 
     # Pass 1: Horizontal low-pass filter on YUV
-    f_yuv_in = ti.Vector.field(3, dtype=float, shape=(in_h, in_w))
-    f_yuv_in.from_numpy(yuv_in)
-    f_yuv_filtered = ti.Vector.field(3, dtype=float, shape=(in_h, internal_samples))
+    f_yuv_in = np.ascontiguousarray(yuv_in, dtype=np.float32)
+    f_yuv_filtered = np.empty((in_h, internal_samples, 3), dtype=np.float32)
     taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
 
     # Pass 2a: Apply optional luma trap and modulate to composite signal
-    f_composite = ti.field(dtype=float, shape=(in_h, internal_samples))
+    f_composite = np.empty((in_h, internal_samples), dtype=np.float32)
     taichi_ntsc_encode_modulate(
         f_yuv_filtered, f_composite, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
@@ -711,7 +710,7 @@ def simulate_ntsc(
     )
 
     # Pass 2: Demodulate composite signal
-    f_demod = ti.Vector.field(3, dtype=float, shape=(in_h, internal_samples))
+    f_demod = np.empty((in_h, internal_samples, 3), dtype=np.float32)
     taichi_ntsc_decode_demodulate(
         f_composite, f_demod, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
@@ -720,7 +719,7 @@ def simulate_ntsc(
 
     # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
     chroma_filter_width = 1.5 * internal_samples / ci.periods_per_active_line
-    f_demod_filtered = ti.Vector.field(4, dtype=float, shape=(in_h, internal_samples))
+    f_demod_filtered = np.empty((in_h, internal_samples, 4), dtype=np.float32)
     taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
 
     # Pass 4: Y/C separation comb filter
@@ -736,7 +735,7 @@ def simulate_ntsc(
     else:
         ft_val = float(ntsc_filter_type)
 
-    f_comb_yuv = ti.Vector.field(3, dtype=float, shape=(in_h, internal_samples))
+    f_comb_yuv = np.empty((in_h, internal_samples, 3), dtype=np.float32)
     taichi_ntsc_decode_comb(
         f_demod_filtered, f_comb_yuv, ft_val, ntsc_frame_count,
         ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame, 0.0,
@@ -744,12 +743,12 @@ def simulate_ntsc(
     )
 
     # Pass 5: Post-comb chroma low-pass filter, luma resampling, and conversion to linear RGB
-    f_linear_out = ti.Vector.field(3, dtype=float, shape=(in_h, samples))
+    f_linear_out = np.empty((in_h, samples, 3), dtype=np.float32)
     taichi_ntsc_decode_chroma_filter(
         f_comb_yuv, f_linear_out, chroma_filter_width, gamma,
     )
 
-    return f_linear_out.to_numpy()
+    return f_linear_out
 
 
 def simulate_analog(

@@ -55,7 +55,7 @@ def linear_to_srgb(img):
 
 
 @ti.func
-def texelFetch(Source, vTexCoords: tm.ivec2) -> tm.vec3:
+def texelFetch(Source: ti.template(), vTexCoords: tm.ivec2) -> tm.vec3:
     """Fetch pixel from img at (x, y), or 0 if outside range"""
     y_size, x_size = Source.shape
     val = tm.vec3(0.0)
@@ -65,14 +65,14 @@ def texelFetch(Source, vTexCoords: tm.ivec2) -> tm.vec3:
 
 
 @ti.func
-def texelFetchRepeat(Source, vTexCoords: tm.ivec2) -> tm.vec3:
+def texelFetchRepeat(Source: ti.template(), vTexCoords: tm.ivec2) -> tm.vec3:
     """Fetch pixel from img at (x, y), with the texture repeated infinitely on both axes"""
     y_size, x_size = Source.shape
     return Source[vTexCoords.y % y_size, vTexCoords.x % x_size]
 
 
 @ti.func
-def texture(Source, vTexCoords: tm.vec2) -> tm.vec3:
+def texture(Source: ti.template(), vTexCoords: tm.vec2) -> tm.vec3:
     """Sample from Source at (x, y) using bilinear interpolation.
 
     Outside of the Source is considered to be 0.

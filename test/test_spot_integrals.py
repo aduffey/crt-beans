@@ -87,10 +87,9 @@ class TestSpotIntegrals(unittest.TestCase):
         img[0] = 0.0
         img[:, :, 2] = 0.0
         out_height, out_width = 13, 19
-        source = ti.Vector.field(n=3, dtype=float, shape=img.shape[:2])
-        source.from_numpy(img)
-        energy = ti.Vector.field(n=3, dtype=float, shape=(4, out_width))
-        widths = ti.Vector.field(n=3, dtype=float, shape=(4, out_width))
+        source = np.ascontiguousarray(img, dtype=np.float32)
+        energy = np.empty((4, out_width, 3), dtype=np.float32)
+        widths = np.empty((4, out_width, 3), dtype=np.float32)
         for method, cubic in [('fast', True), ('fast-cosine', False)]:
             with self.subTest(method=method):
                 expected_energy, expected_widths = reference_horizontal(img, out_width, out_width / out_height, cubic)
@@ -100,8 +99,8 @@ class TestSpotIntegrals(unittest.TestCase):
                     spot_sim.taichi_spot_fast2_horizontal_fragment(*args)
                 else:
                     spot_sim.taichi_spot_fast2_horizontal_fragment(*args, cubic_horizontal=False)
-                np.testing.assert_allclose(energy.to_numpy(), expected_energy, rtol=2e-5, atol=2e-6)
-                np.testing.assert_allclose(widths.to_numpy(), expected_widths, rtol=2e-5, atol=2e-6)
+                np.testing.assert_allclose(energy, expected_energy, rtol=2e-5, atol=2e-6)
+                np.testing.assert_allclose(widths, expected_widths, rtol=2e-5, atol=2e-6)
 
                 expected = np.zeros((out_height, out_width, 3))
                 for y in range(out_height):
@@ -119,12 +118,10 @@ class TestSpotIntegrals(unittest.TestCase):
     def test_cosine_vertical_matches_analytical_in_all_line_modes(self):
         # Constant colors have a fixed spot width, so the separable cosine
         # approximation must agree with the full analytical cosine model.
-        img = np.full((480, 8, 3), [0.02, 0.1, 0.5], dtype=np.float32)
-        source = ti.Vector.field(n=3, dtype=float, shape=img.shape[:2])
-        source.from_numpy(img)
-        energy = ti.Vector.field(n=3, dtype=float, shape=(480, 19))
-        widths = ti.Vector.field(n=3, dtype=float, shape=energy.shape)
-        output = ti.Vector.field(n=3, dtype=float, shape=(37, 19))
+        source = np.full((480, 8, 3), [0.02, 0.1, 0.5], dtype=np.float32)
+        energy = np.empty((480, 19, 3), dtype=np.float32)
+        widths = np.empty_like(energy)
+        output = np.empty((37, 19, 3), dtype=np.float32)
         for mode in [0, 1, 2, 3]:
             spot_sim.taichi_spot_fast2_horizontal_fragment(
                 source, energy, widths, 0.9, 0.4, 0.0, 0.0, 19 / 37,
@@ -133,13 +130,12 @@ class TestSpotIntegrals(unittest.TestCase):
                 with self.subTest(mode=mode, frame=frame):
                     spot_sim.taichi_spot_analytical_fragment(
                         source, output, 0.9, 0.4, 0.0, 0.0, mode, 1, frame)
-                    expected = output.to_numpy()
+                    expected = output.copy()
                     spot_sim.taichi_spot_fast2_vertical_fragment(
                         energy, widths, output, 0.9, 0.4, 0.0, 0.0,
                         mode, 1, frame, cubic_vertical=False)
-                    actual = output.to_numpy()
-                    self.assertTrue(np.isfinite(actual).all())
-                    np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-6)
+                    self.assertTrue(np.isfinite(output).all())
+                    np.testing.assert_allclose(output, expected, rtol=2e-5, atol=2e-6)
 
     def test_cosine_method_is_available_from_cli(self):
         args = sim_taichi.build_parser().parse_args(['in.png', 'out.png', '--scanline-method', 'fast-cosine'])

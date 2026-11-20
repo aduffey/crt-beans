@@ -10,13 +10,15 @@ import spot_sim
 
 
 @ti.func
-def cosine_horizontal(uv, source, source_size, output_size, delta, maximum, minimum):
+def cosine_horizontal(uv, source: ti.template(), source_size, output_size, delta, maximum, minimum):
     return spot_sim.spot_sim_fast2_horizontal(
         uv, source, source_size, output_size, delta, maximum, minimum, cubic_horizontal=False)
 
 
 @ti.kernel
-def evaluate_horizontal(source: ti.template(), energy: ti.template(), widths: ti.template(),
+def evaluate_horizontal(source: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                        energy: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+                        widths: ti.types.ndarray(dtype=tm.vec3, ndim=2),
                         implementation: ti.template(), maximum: float, minimum: float):
     ih, iw = source.shape
     oh, ow = energy.shape
@@ -31,17 +33,16 @@ def evaluate_horizontal(source: ti.template(), energy: ti.template(), widths: ti
 
 class TestSpotHorizontalVariants(unittest.TestCase):
     def evaluate(self, image):
-        source = ti.Vector.field(3, ti.f32, shape=image.shape[:2])
-        energy = ti.Vector.field(3, ti.f32, shape=(image.shape[0], 120))
-        widths = ti.Vector.field(3, ti.f32, shape=energy.shape)
-        source.from_numpy(image)
+        source = np.ascontiguousarray(image, dtype=np.float32)
+        energy = np.empty((image.shape[0], 120, 3), dtype=np.float32)
+        widths = np.empty_like(energy)
         results = []
         for implementation in [spot_sim.spot_sim_fast2_horizontal,
                                cosine_horizontal,
                                spot_sim.spot_sim_fast3_horizontal,
                                spot_sim.spot_sim_fast4_horizontal]:
             evaluate_horizontal(source, energy, widths, implementation, .9, .4)
-            result = energy.to_numpy(), widths.to_numpy()
+            result = energy.copy(), widths.copy()
             self.assertTrue(np.isfinite(result[0]).all())
             self.assertTrue(np.isfinite(result[1]).all())
             self.assertTrue(np.all(result[1] > 0))
@@ -72,15 +73,13 @@ class TestSpotHorizontalVariants(unittest.TestCase):
         self.assertGreater(float(np.max(rms[1] - arithmetic[1])), .001)
 
     def test_dark_constant_matches_analytical_for_each_variant(self):
-        image = np.full((4, 12, 3), .1 ** 2.4, np.float32)
-        source = ti.Vector.field(3, ti.f32, shape=image.shape[:2])
-        energy = ti.Vector.field(3, ti.f32, shape=(4, 120))
-        widths = ti.Vector.field(3, ti.f32, shape=energy.shape)
-        output = ti.Vector.field(3, ti.f32, shape=(90, 120))
-        source.from_numpy(image)
+        source = np.full((4, 12, 3), .1 ** 2.4, np.float32)
+        energy = np.empty((4, 120, 3), dtype=np.float32)
+        widths = np.empty_like(energy)
+        output = np.empty((90, 120, 3), dtype=np.float32)
         for maximum, minimum in [(.9, .4), (.5, .8)]:
             spot_sim.taichi_spot_analytical_fragment(source, output, maximum, minimum, 0., 0.)
-            reference = output.to_numpy()
+            reference = output.copy()
             # The analytical reference uses a raised-cosine spot on both axes.
             for implementation in [cosine_horizontal,
                                    spot_sim.spot_sim_fast3_horizontal,
@@ -89,18 +88,16 @@ class TestSpotHorizontalVariants(unittest.TestCase):
                     evaluate_horizontal(source, energy, widths, implementation, maximum, minimum)
                     spot_sim.taichi_spot_fast2_vertical_fragment(
                         energy, widths, output, maximum, minimum, 0., 0., cubic_vertical=False)
-                    result = output.to_numpy()
-                    self.assertTrue(np.isfinite(result).all())
-                    np.testing.assert_allclose(result, reference, atol=1e-7, rtol=1e-4)
+                    self.assertTrue(np.isfinite(output).all())
+                    np.testing.assert_allclose(output, reference, atol=1e-7, rtol=1e-4)
 
     def test_zero_widths_and_energy_produce_finite_black(self):
-        energy = ti.Vector.field(3, ti.f32, shape=(4, 12))
-        widths = ti.Vector.field(3, ti.f32, shape=energy.shape)
-        output = ti.Vector.field(3, ti.f32, shape=(90, 120))
+        energy = np.zeros((4, 12, 3), dtype=np.float32)
+        widths = np.zeros_like(energy)
+        output = np.empty((90, 120, 3), dtype=np.float32)
         spot_sim.taichi_spot_fast2_vertical_fragment(energy, widths, output, .9, .4, 0., 0.)
-        result = output.to_numpy()
-        self.assertTrue(np.isfinite(result).all())
-        np.testing.assert_array_equal(result, 0.)
+        self.assertTrue(np.isfinite(output).all())
+        np.testing.assert_array_equal(output, 0.)
 
 
 if __name__ == '__main__':

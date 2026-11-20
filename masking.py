@@ -81,13 +81,13 @@ def generate_subpixel_mask(shape: tuple[int, ...], mask_pattern: int) -> tuple[n
 
 def generate_coverage_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
     out_height, out_width = shape[:2]
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     coverage_mask_fragment(field_out, mask_triads)
-    return field_out.to_numpy(), 3.0
+    return field_out, 3.0
 
 
 @ti.kernel
-def coverage_mask_fragment(field_out: ti.template(), mask_triads: float):
+def coverage_mask_fragment(field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2), mask_triads: float):
     (out_height, out_width) = field_out.shape
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
@@ -111,13 +111,13 @@ def coverage_mask_taichi(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads: f
 
 def generate_bandlimit_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
     out_height, out_width = shape[:2]
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     bandlimit_mask_fragment(field_out, mask_triads)
-    return field_out.to_numpy(), 3.0
+    return field_out, 3.0
 
 
 @ti.kernel
-def bandlimit_mask_fragment(field_out: ti.template(), mask_triads: float):
+def bandlimit_mask_fragment(field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2), mask_triads: float):
     (out_height, out_width) = field_out.shape
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
@@ -167,7 +167,7 @@ def bandlimit_mask_taichi2(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads:
 
 def generate_additive_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
     out_height, out_width = shape[:2]
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     additive_mask_fragment(field_out, mask_triads)
 
     if mask_triads * 4 < out_width:
@@ -177,11 +177,11 @@ def generate_additive_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[
     else:
         mask_coverage = 1.0
 
-    return field_out.to_numpy(), mask_coverage
+    return field_out, mask_coverage
 
 
 @ti.kernel
-def additive_mask_fragment(field_out: ti.template(), mask_triads: float):
+def additive_mask_fragment(field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2), mask_triads: float):
     (out_height, out_width) = field_out.shape
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
@@ -219,7 +219,7 @@ def additive_mask_taichi(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads: f
 
 def generate_additive2_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
     out_height, out_width = shape[:2]
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     additive2_mask_fragment(field_out, mask_triads)
 
     def smoothstep(a, b, x):
@@ -230,11 +230,11 @@ def generate_additive2_mask(shape: tuple[int, ...], mask_triads: float) -> tuple
 
     mask_coverage = 1.0 / (0.5 - smoothstep(4.0, 5.0, (out_width / mask_triads)) / 8.0)
 
-    return field_out.to_numpy(), mask_coverage
+    return field_out, mask_coverage
 
 
 @ti.kernel
-def additive2_mask_fragment(field_out: ti.template(), mask_triads: float):
+def additive2_mask_fragment(field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2), mask_triads: float):
     (out_height, out_width) = field_out.shape
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
@@ -290,18 +290,21 @@ def generate_mask(mask, out_shape, triads: float):
     (out_height, out_width, out_planes) = out_shape
     scale = mask_width / 2 * triads / out_width
     print("scale: {}".format(scale))
-    field_in = ti.Vector.field(n=3, dtype=float, shape=(mask_height, mask_width))
-    field_in.from_numpy(mask)
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_width, mask_height))
+    field_in = np.ascontiguousarray(mask, dtype=np.float32)
+    field_out = np.empty((out_width, mask_height, 3), dtype=np.float32)
     lanczos3_downscale(field_in, field_out, scale)
     field_in = field_out
-    field_out = ti.Vector.field(n=3, dtype=float, shape=(out_height, out_width))
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
     lanczos3_downscale(field_in, field_out, scale)
-    return field_out.to_numpy()
+    return field_out
 
 
 @ti.kernel
-def lanczos3_downscale(field_in: ti.template(), field_out: ti.template(), scale: float):
+def lanczos3_downscale(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    scale: float,
+):
     (in_height, in_width) = field_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
@@ -313,7 +316,7 @@ def lanczos3_downscale(field_in: ti.template(), field_out: ti.template(), scale:
 
 
 @ti.func
-def lanczos3_taichi(vTexCoord: tm.vec2, Source, SourceSize: tm.vec4, OutputSize: tm.vec4, scale: float) -> tm.vec3:
+def lanczos3_taichi(vTexCoord: tm.vec2, Source: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4, scale: float) -> tm.vec3:
     kernel_size = 3  # 1, 2, or 3
     x_pos = vTexCoord.y * OutputSize.y * scale
     y_pos = int(tm.floor(vTexCoord.x * SourceSize.y))

@@ -1,11 +1,6 @@
-import subprocess
-import sys
 import unittest
-from pathlib import Path
 
 import numpy as np
-import taichi as ti
-import taichi.math as tm
 
 import config
 import filtering
@@ -63,22 +58,14 @@ class TestPointQuadratureAndZOHFallback(unittest.TestCase):
     def _eval_horizontal(self, img, out_width, max_spot_size, min_spot_size, force_zoh=False):
         in_h, in_w, _ = img.shape
         aspect = out_width / in_h
-        source = ti.Vector.field(3, dtype=ti.f32)
-        energy = ti.Vector.field(3, dtype=ti.f32)
-        widths = ti.Vector.field(3, dtype=ti.f32)
-        builder = ti.FieldsBuilder()
-        builder.dense(ti.ij, (in_h, in_w)).place(source)
-        builder.dense(ti.ij, (in_h, out_width)).place(energy, widths)
-        tree = builder.finalize()
-        try:
-            source.from_numpy(img.astype(np.float32))
-            spot_sim.taichi_spot_fast2_horizontal_fragment(
-                source, energy, widths, max_spot_size, min_spot_size, 0.0, 0.0, aspect,
-                force_zoh=force_zoh,
-            )
-            return energy.to_numpy(), widths.to_numpy()
-        finally:
-            tree.destroy()
+        source = np.ascontiguousarray(img, dtype=np.float32)
+        energy = np.empty((in_h, out_width, 3), dtype=np.float32)
+        widths = np.empty((in_h, out_width, 3), dtype=np.float32)
+        spot_sim.taichi_spot_fast2_horizontal_fragment(
+            source, energy, widths, max_spot_size, min_spot_size, 0.0, 0.0, aspect,
+            force_zoh=force_zoh,
+        )
+        return energy, widths
 
     def test_threshold_selects_pq_or_zoh(self):
         rng = np.random.default_rng(123)
@@ -179,65 +166,33 @@ class TestNTSCChromaFilterResampling(unittest.TestCase):
         yuv_carrier[0, :, 1] = 0.2 * np.cos(2.0 * np.pi * periods * t_900)
         yuv_carrier[0, :, 2] = 0.2 * np.sin(2.0 * np.pi * periods * t_900)
 
-        field_in = ti.Vector.field(3, dtype=ti.f32)
-        field_out_1800 = ti.Vector.field(3, dtype=ti.f32)
-        field_out_900 = ti.Vector.field(3, dtype=ti.f32)
-        builder = ti.FieldsBuilder()
-        builder.dense(ti.ij, (1, 900)).place(field_in, field_out_900)
-        builder.dense(ti.ij, (1, 1800)).place(field_out_1800)
-        tree = builder.finalize()
-        try:
-            # Flat preservation (gamma=1.0 for direct linear comparison)
-            field_in.from_numpy(yuv_flat)
-            filtering.taichi_ntsc_decode_chroma_filter(field_in, field_out_1800, chroma_width, 1.0)
-            out_flat = field_out_1800.to_numpy()[0, 60:-60]
-            expected_rgb = filtering.yuv_to_linear(yuv_flat[0, :1], 1.0)
-            np.testing.assert_allclose(out_flat, np.broadcast_to(expected_rgb, out_flat.shape), atol=1e-5)
+        field_out_1800 = np.empty((1, 1800, 3), dtype=np.float32)
+        field_out_900 = np.empty((1, 900, 3), dtype=np.float32)
 
-            # 1:1 pass-through identity on luma
-            field_in.from_numpy(yuv_wave)
-            filtering.taichi_ntsc_decode_chroma_filter(field_in, field_out_900, chroma_width, 1.0)
-            np.testing.assert_allclose(field_out_900.to_numpy()[0, :, 0], yuv_wave[0, :, 0], atol=2e-6)
+        # Flat preservation (gamma=1.0 for direct linear comparison)
+        filtering.taichi_ntsc_decode_chroma_filter(yuv_flat, field_out_1800, chroma_width, 1.0)
+        out_flat = field_out_1800[0, 60:-60]
+        expected_rgb = filtering.yuv_to_linear(yuv_flat[0, :1], 1.0)
+        np.testing.assert_allclose(out_flat, np.broadcast_to(expected_rgb, out_flat.shape), atol=1e-5)
 
-            # 900 -> 1800 high-frequency 4 MHz luma preservation
-            filtering.taichi_ntsc_decode_chroma_filter(field_in, field_out_1800, chroma_width, 1.0)
-            t_1800 = (np.arange(1800) + 0.5) / 1800.0
-            expected_wave = 0.5 + 0.25 * np.cos(2.0 * np.pi * cycles_4mhz * t_1800)
-            np.testing.assert_allclose(
-                field_out_1800.to_numpy()[0, 40:-40, 0],
-                expected_wave[40:-40],
-                atol=5e-3,
-            )
+        # 1:1 pass-through identity on luma
+        filtering.taichi_ntsc_decode_chroma_filter(yuv_wave, field_out_900, chroma_width, 1.0)
+        np.testing.assert_allclose(field_out_900[0, :, 0], yuv_wave[0, :, 0], atol=2e-6)
 
-            # Subcarrier ripple rejection in chroma after resampling
-            field_in.from_numpy(yuv_carrier)
-            filtering.taichi_ntsc_decode_chroma_filter(field_in, field_out_1800, chroma_width, 1.0)
-            out_carrier = field_out_1800.to_numpy()[0, 60:-60]
-            self.assertLess(float(np.max(np.abs(out_carrier - 0.5))), 5e-4)
-        finally:
-            tree.destroy()
+        # 900 -> 1800 high-frequency 4 MHz luma preservation
+        filtering.taichi_ntsc_decode_chroma_filter(yuv_wave, field_out_1800, chroma_width, 1.0)
+        t_1800 = (np.arange(1800) + 0.5) / 1800.0
+        expected_wave = 0.5 + 0.25 * np.cos(2.0 * np.pi * cycles_4mhz * t_1800)
+        np.testing.assert_allclose(
+            field_out_1800[0, 40:-40, 0],
+            expected_wave[40:-40],
+            atol=5e-3,
+        )
 
-
-def run_isolated_tests():
-    result = subprocess.run(
-        [
-            sys.executable,
-            '-m',
-            'unittest',
-            'test.test_resampling_and_quadrature.TestPointQuadratureAndZOHFallback',
-            'test.test_resampling_and_quadrature.TestNTSCChromaFilterResampling',
-        ],
-        cwd=Path(__file__).resolve().parents[1],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        raise AssertionError(result.stdout + result.stderr)
-
-
-def load_tests(loader, tests, pattern):
-    return unittest.TestSuite([unittest.FunctionTestCase(run_isolated_tests)])
+        # Subcarrier ripple rejection in chroma after resampling
+        filtering.taichi_ntsc_decode_chroma_filter(yuv_carrier, field_out_1800, chroma_width, 1.0)
+        out_carrier = field_out_1800[0, 60:-60]
+        self.assertLess(float(np.max(np.abs(out_carrier - 0.5))), 5e-4)
 
 
 if __name__ == '__main__':
