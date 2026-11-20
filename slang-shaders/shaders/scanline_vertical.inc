@@ -64,8 +64,7 @@ vec3 render_scanlines(vec2 vTexCoord, vec2 viewportCoord) {
         vec4 mask = dynamic_aperture_grille(viewportCoord, params.OutputSize, params.DynamicMaskTriads, params.MaskSmoothness);
         value = blend_mask(mask.rgb, value, mask.a, params.MaskMitigation);
     } else if (params.MaskType == 3.0) {
-        vec4 mask = dynamic2_aperture_grille(viewportCoord, params.OutputSize, params.DynamicMaskTriads, params.MaskSmoothness);
-        value = blend_mask(mask.rgb, value, mask.a, params.MaskMitigation);
+        value = apply_dynamic2_mask(value, viewportCoord, params.OutputSize, params.DynamicMaskTriads, params.MaskSmoothness, params.MaskMitigation);
     } else if (params.MaskType == 4.0) {
         vec4 mask = monochrome_mask(viewportCoord, params.OutputSize, params.SubpixelMaskPattern);
         value = blend_mask(mask.rgb, value, mask.a, params.MaskMitigation);

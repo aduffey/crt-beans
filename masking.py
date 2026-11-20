@@ -173,26 +173,57 @@ def bandlimit_mask_taichi2(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads:
     return tm.clamp(mask, 0.0, 1.0)
 
 
-def generate_dynamic2_mask(shape: tuple[int, ...], mask_triads: float, smoothness: float = 0.0) -> tuple[np.ndarray, float]:
-    """Shader dynamic2: harmonic aperture grille with smoothstep harmonic phasing."""
-    out_height, out_width = shape[:2]
+def apply_dynamic2_mask(
+    pixel_value: np.ndarray,
+    mask_triads: float,
+    smoothness: float = 0.0,
+    mitigation: float = 1.0,
+) -> np.ndarray:
+    """Shader dynamic2: harmonic aperture grille with per-channel harmonic bloom
+    blending and DC-preserving Gaussian smoothness, matching apply_dynamic2_mask
+    in slang-shaders/shaders/mask.inc.
+    """
+    out_width = pixel_value.shape[1]
 
     def smoothstep(a: float, b: float, x: float) -> float:
         t = np.clip((x - a) / (b - a), 0.0, 1.0)
         return float(t * t * (3.0 - 2.0 * t))
 
-    p_eff = out_width / (mask_triads * (1.0 + smoothness))
-    t1 = smoothstep(2.0, 3.0, p_eff)
-    t2 = smoothstep(4.0, 6.0, p_eff)
+    p = out_width / mask_triads
+    t1 = smoothstep(2.0, 3.0, p)
+    t2 = smoothstep(4.0, 5.0, p)
+    dc0 = 1.0 - 0.5 * t1 - 0.125 * t2
+    dc_base = 0.5 - 0.125 * t2
 
-    phase = 2.0 * np.pi * mask_triads * (np.arange(out_width) + 0.5) / out_width
+    # Align R, G, B phosphor centers at 1/6, 3/6, 5/6 of each triad.
+    phase = 2.0 * np.pi * mask_triads * (np.arange(out_width) + 0.5) / out_width - np.pi / 3.0
     cs, sn = np.cos(phase), np.sin(phase)
     c1 = np.stack((cs, -0.5 * cs + 0.86602540378 * sn,
-                   -0.5 * cs - 0.86602540378 * sn), axis=-1)
-    c2 = 2.0 * c1 * c1 - 1.0
-    dc = 1.0 - 0.5 * t1 - 0.125 * t2
-    mask = np.broadcast_to(dc + 0.5 * t1 * c1 + 0.125 * t2 * c2, (out_height, out_width, 3))
-    return mask.astype(np.float32), float(1.0 / dc)
+                   -0.5 * cs - 0.86602540378 * sn), axis=-1).astype(np.float32)
+    c2 = (2.0 * c1 * c1 - 1.0).astype(np.float32)
+
+    img = np.asarray(pixel_value, dtype=np.float32)
+    dc0_f = np.float32(dc0)
+    dc_base_f = np.float32(dc_base)
+    t1_f = np.float32(t1)
+    t2_f = np.float32(t2)
+    mit_f = np.float32(mitigation)
+
+    v = img * (dc0_f * (np.float32(1.0) - mit_f) + mit_f)
+    v_scaled = v / dc_base_f
+    a1 = t1_f * np.maximum(
+        np.minimum(np.float32(0.5) * np.minimum(v_scaled, np.float32(1.0)), np.float32(1.0) - v),
+        np.float32(0.0),
+    )
+    a2 = np.maximum(
+        np.minimum(np.float32(0.125) * t2_f * v_scaled, np.float32(0.5) - v),
+        np.float32(0.0),
+    )
+
+    u = np.float32(1.0 - smoothness)
+    u2 = u * u
+    out = v + (a1 * u) * c1 + (a2 * (u2 * u2)) * c2
+    return out.astype(np.float32)
 
 
 def generate_monochrome_mask(shape: tuple[int, ...], mask_pattern: int = 1) -> tuple[np.ndarray, float]:
@@ -393,7 +424,7 @@ def apply_mask(
     elif mask_type in ('bandlimit', 'dynamic'):
         mask, coverage = generate_bandlimit_mask(shape, mask_triads, mask_smoothness)
     elif mask_type == 'dynamic2':
-        mask, coverage = generate_dynamic2_mask(shape, mask_triads, mask_smoothness)
+        return apply_dynamic2_mask(img, mask_triads, mask_smoothness, mitigation)
     elif mask_type == 'monochrome':
         mask, coverage = generate_monochrome_mask(shape, mask_pattern)
     elif mask_type == 'coverage':

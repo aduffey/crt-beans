@@ -198,21 +198,44 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads, fl
 }
 
 // Harmonic aperture grille that phases in the first and second harmonics via
-// smoothstep based on the effective pixels per triad.
-vec4 dynamic2_aperture_grille(vec2 coord, vec4 output_size, float mask_triads, float smoothness) {
-    float p_eff = output_size.x / (mask_triads * (1.0 + smoothness));
-    float t1 = smoothstep(2.0, 3.0, p_eff);
-    float t2 = smoothstep(4.0, 6.0, p_eff);
+// smoothstep based on pixels per triad, blends per-channel by blooming bright
+// phosphors (shedding the second harmonic before the first), and applies a
+// DC-preserving Gaussian smoothness filter.
+vec3 apply_dynamic2_mask(
+    vec3 pixel_value,
+    vec2 coord,
+    vec4 output_size,
+    float mask_triads,
+    float smoothness,
+    float mitigation
+) {
+    float p = output_size.x / mask_triads;
+    float t1 = smoothstep(2.0, 3.0, p);
+    float t2 = smoothstep(4.0, 5.0, p);
+    float dc0 = 1.0 - 0.5 * t1 - 0.125 * t2;
+    float dc_base = 0.5 - 0.125 * t2;
 
-    float phase = 2.0 * PI * mask_triads * coord.x;
+    // Align R, G, B phosphor centers at 1/6, 3/6, 5/6 of each triad to match
+    // dynamic_aperture_grille and pixel centers when p is an integer.
+    float phase = 2.0 * PI * mask_triads * coord.x - PI / 3.0;
     float cs = cos(phase);
     float sn = sin(phase);
     vec3 c1 = vec3(cs, -0.5 * cs + 0.86602540378 * sn, -0.5 * cs - 0.86602540378 * sn);
     vec3 c2 = 2.0 * c1 * c1 - 1.0;
 
-    float dc = 1.0 - 0.5 * t1 - 0.125 * t2;
-    vec3 mask = dc + 0.5 * t1 * c1 + 0.125 * t2 * c2;
-    return vec4(mask, 1.0 / dc);
+    vec3 v = pixel_value * mix(dc0, 1.0, mitigation);
+
+    // Scale linearly up to dc_base, then bloom (shed 2nd harmonic first, then
+    // 1st) while keeping peaks <= 1 and spatial mean == v. Apply t1 post-bloom
+    // so the [2, 3] transition attenuates uniformly across all brightnesses.
+    vec3 v_scaled = v / dc_base;
+    vec3 a1 = t1 * max(min(0.5 * min(v_scaled, vec3(1.0)), 1.0 - v), vec3(0.0));
+    vec3 a2 = max(min(0.125 * t2 * v_scaled, 0.5 - v), vec3(0.0));
+
+    // Apply DC-preserving Gaussian smoothness around mean v: H(n) = (1 - s)^(n^2).
+    float u = 1.0 - smoothness;
+    float u2 = u * u;
+    return v + (a1 * u) * c1 + (a2 * (u2 * u2)) * c2;
 }
 
 // Static 2-5 pixel repeats: WB, WWB, WWBB, WWWBB, independent of subpixels.

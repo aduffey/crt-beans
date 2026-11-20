@@ -669,48 +669,133 @@ class TestMaskTypes(unittest.TestCase):
                     np.testing.assert_allclose(mask[0, indices], expected, atol=3e-4)
                     np.testing.assert_allclose(mask.sum(axis=-1), 1.0, atol=2e-6)
 
-    def test_dynamic2_harmonics_and_smoothness(self):
+    def test_dynamic2_harmonics_bloom_and_smoothness(self):
         width = 1440
 
         def smoothstep(a, b, x):
             t = np.clip((x - a) / (b - a), 0.0, 1.0)
-            return t * t * (3.0 - 2.0 * t)
+            return float(t * t * (3.0 - 2.0 * t))
 
-        # Case 1: p_eff <= 2.0 -> DC only (mask == 1.0, coverage == 1.0)
-        dc_mask, dc_cov = masking.generate_dynamic2_mask((2, width), 720, smoothness=0.0)
-        self.assertEqual(dc_mask.shape, (2, width, 3))
-        self.assertEqual(dc_cov, 1.0)
-        np.testing.assert_array_equal(dc_mask, 1.0)
+        ones = np.ones((2, width, 3), dtype=np.float32)
 
-        # Case 2: 3.0 <= p_eff <= 4.0 -> pure 1st harmonic (coverage == 2.0)
-        m1_mask, m1_cov = masking.generate_dynamic2_mask((2, width), 400, smoothness=0.0)
-        self.assertAlmostEqual(m1_cov, 2.0, places=6)
-        self.assertTrue(np.all((m1_mask >= 0.0) & (m1_mask <= 1.0)))
-        spectrum_m1 = np.fft.rfft(m1_mask[0] - 0.5, axis=0) / width
+        # Case 1: p <= 2.0 -> DC only (identity for all mitigation and smoothness)
+        for mit in (0.0, 0.5, 1.0):
+            img = np.full((2, width, 3), [0.2, 0.5, 0.9], dtype=np.float32)
+            out = masking.apply_dynamic2_mask(img, 720, smoothness=0.0, mitigation=mit)
+            self.assertEqual(out.shape, (2, width, 3))
+            self.assertEqual(out.dtype, np.float32)
+            np.testing.assert_allclose(out, img, atol=1e-6)
+
+        # Case 2: 3.0 <= p <= 4.0 -> pure 1st harmonic (dc0 == 0.5)
+        m1 = masking.apply_dynamic2_mask(ones, 400, smoothness=0.0, mitigation=0.0)
+        self.assertTrue(np.all((m1 >= -1e-6) & (m1 <= 1.0 + 1e-6)))
+        np.testing.assert_allclose(m1.mean(axis=1), 0.5, atol=1e-6)
+        spectrum_m1 = np.fft.rfft(m1[0] - 0.5, axis=0) / width
         np.testing.assert_allclose(np.abs(spectrum_m1[400]), 0.25, atol=1e-6)
         np.testing.assert_allclose(np.abs(spectrum_m1[width - 800]), 0.0, atol=1e-6)
 
-        # Case 3: p_eff >= 6.0 -> full 1st + 2nd harmonics (coverage == 8/3)
-        m2_mask, m2_cov = masking.generate_dynamic2_mask((2, width), 180, smoothness=0.0)
-        self.assertAlmostEqual(m2_cov, 8.0 / 3.0, places=6)
-        self.assertTrue(np.all((m2_mask >= 0.0) & (m2_mask <= 1.0)))
-        spectrum_m2 = np.fft.rfft(m2_mask[0] - 0.375, axis=0) / width
-        np.testing.assert_allclose(np.abs(spectrum_m2[180]), 0.25, atol=1e-6)
-        np.testing.assert_allclose(np.abs(spectrum_m2[360]), 0.0625, atol=1e-6)
+        # Case 3: p >= 5.0 -> full 1st + 2nd harmonics (dc0 == 0.375)
+        for triads in (288, 180):  # p = 5.0, p = 8.0
+            m2 = masking.apply_dynamic2_mask(ones, triads, smoothness=0.0, mitigation=0.0)
+            self.assertTrue(np.all((m2 >= -1e-6) & (m2 <= 1.0 + 1e-6)))
+            np.testing.assert_allclose(m2.mean(axis=1, dtype=np.float64), 0.375, atol=1e-6)
+            spectrum_m2 = np.fft.rfft(m2[0] - 0.375, axis=0) / width
+            np.testing.assert_allclose(np.abs(spectrum_m2[triads]), 0.25, atol=1e-6)
+            np.testing.assert_allclose(np.abs(spectrum_m2[2 * triads]), 0.0625, atol=1e-6)
 
-        # Case 4: Intermediate p_eff and smoothness tuning
-        for triads in (240.0, 300.0, 550.0):
-            for smoothness in (0.0, 0.25, 0.5, 1.0):
-                with self.subTest(triads=triads, smoothness=smoothness):
-                    mask, cov = masking.generate_dynamic2_mask((2, width), triads, smoothness)
-                    p_eff = width / (triads * (1.0 + smoothness))
-                    t1 = smoothstep(2.0, 3.0, p_eff)
-                    t2 = smoothstep(4.0, 6.0, p_eff)
-                    dc = 1.0 - 0.5 * t1 - 0.125 * t2
-                    self.assertAlmostEqual(cov, 1.0 / dc, places=6)
-                    self.assertTrue(np.all(np.isfinite(mask)))
-                    self.assertTrue(np.all((mask >= 0.0) & (mask <= 1.0)))
-                    np.testing.assert_allclose(mask.sum(axis=-1), 3.0 * dc, atol=2e-6)
+        # Midpoint of 2nd harmonic ramp: p = 4.5 (triads = 320) -> t2 = 0.5, dc0 = 0.4375
+        m2_mid = masking.apply_dynamic2_mask(ones, 320, smoothness=0.0, mitigation=0.0)
+        np.testing.assert_allclose(m2_mid.mean(axis=1, dtype=np.float64), 0.4375, atol=1e-6)
+        spec_m2_mid = np.fft.rfft(m2_mid[0] - 0.4375, axis=0) / width
+        np.testing.assert_allclose(np.abs(spec_m2_mid[320]), 0.25, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec_m2_mid[640]), 0.03125, atol=1e-6)
+
+        # Case 3b: Post-bloom t1 attenuation in (2.0, 3.0) is uniform across darks, midtones, highlights
+        # p = 2.5 (triads = 576) -> t1 = 0.5, t2 = 0.0 -> a1 = 0.5 * min(v, 1 - v)
+        rgb_t1 = np.full((1, width, 3), [0.25, 0.50, 0.75], dtype=np.float32)
+        out_t1 = masking.apply_dynamic2_mask(rgb_t1, 576, smoothness=0.0, mitigation=1.0)
+        np.testing.assert_allclose(out_t1.mean(axis=1, dtype=np.float64), rgb_t1[:, 0], atol=1e-6)
+        spec_t1 = np.fft.rfft(out_t1[0] - rgb_t1[0, 0], axis=0) / width
+        np.testing.assert_allclose(np.abs(spec_t1[576, 0]), (0.5 * 0.25) / 2.0, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec_t1[576, 1]), (0.5 * 0.50) / 2.0, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec_t1[576, 2]), (0.5 * 0.25) / 2.0, atol=1e-6)
+
+        # Case 4: Per-channel harmonic bloom regimes (p = 8.0 -> t1 = 1, t2 = 1, dc0 = 0.375, dc1 = 0.5)
+        # Ch0 = 0.25 (<= dc0), Ch1 = 0.45 (dc0 < v <= 0.5), Ch2 = 0.75 (> 0.5)
+        rgb = np.full((2, width, 3), [0.25, 0.45, 0.75], dtype=np.float32)
+        bloomed = masking.apply_dynamic2_mask(rgb, 180, smoothness=0.0, mitigation=1.0)
+        self.assertTrue(np.all((bloomed >= -1e-6) & (bloomed <= 1.0 + 1e-6)))
+        np.testing.assert_allclose(bloomed.mean(axis=1, dtype=np.float64), rgb[:, 0], atol=1e-6)
+        spec = np.fft.rfft(bloomed[0] - rgb[0, 0], axis=0) / width
+        # Ch0 (0.25 <= 0.375): scaled linearly by 0.25 / 0.375 = 2/3 -> a1 = 1/3, a2 = 1/12
+        np.testing.assert_allclose(np.abs(spec[180, 0]), (1.0 / 3.0) / 2.0, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec[360, 0]), (1.0 / 12.0) / 2.0, atol=1e-6)
+        # Ch1 (0.45 in (0.375, 0.5]): sheds 2nd harmonic first -> a1 = 0.5, a2 = 0.05
+        np.testing.assert_allclose(np.abs(spec[180, 1]), 0.5 / 2.0, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec[360, 1]), 0.05 / 2.0, atol=1e-6)
+        # Ch2 (0.75 > 0.5): 2nd harmonic gone, 1st harmonic = 1 - 0.75 = 0.25
+        np.testing.assert_allclose(np.abs(spec[180, 2]), 0.25 / 2.0, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec[360, 2]), 0.0, atol=1e-6)
+        # Finely sampled triad confirms black gaps stay 0.0 and peaks stay 1.0 up to v = 0.50
+        mid = np.full((1, width, 3), [0.45, 0.50, 0.75], dtype=np.float32)
+        bloomed_fine = masking.apply_dynamic2_mask(mid, 10, smoothness=0.0, mitigation=1.0)
+        self.assertLess(float(bloomed_fine[0, :, 0].min()), 1e-3)
+        self.assertGreater(float(bloomed_fine[0, :, 0].max()), 1.0 - 1e-3)
+        self.assertLess(float(bloomed_fine[0, :, 1].min()), 1e-3)
+        self.assertGreater(float(bloomed_fine[0, :, 1].max()), 1.0 - 1e-3)
+        self.assertAlmostEqual(float(bloomed_fine[0, :, 2].min()), 0.5, places=3)
+        self.assertGreater(float(bloomed_fine[0, :, 2].max()), 1.0 - 1e-3)
+
+        # Case 5: DC-preserving Gaussian smoothness (u, u^4), monotonic contrast, locked brightness
+        for triads in (180.0, 288.0, 320.0, 550.0):
+            p = width / triads
+            t1 = smoothstep(2.0, 3.0, p)
+            t2 = smoothstep(4.0, 5.0, p)
+            dc0 = 1.0 - 0.5 * t1 - 0.125 * t2
+            for mit in (0.0, 0.5, 1.0):
+                for val in (0.20, 0.45, 0.67, 0.90):
+                    img = np.full((1, width, 3), val, dtype=np.float32)
+                    expected_mean = val * (dc0 * (1.0 - mit) + mit)
+                    prev_std = float('inf')
+                    for smoothness in (0.0, 0.25, 0.5, 0.75, 1.0):
+                        with self.subTest(triads=triads, mit=mit, val=val, smoothness=smoothness):
+                            out = masking.apply_dynamic2_mask(img, triads, smoothness, mit)
+                            self.assertTrue(np.all(np.isfinite(out)))
+                            self.assertTrue(np.all((out >= -1e-6) & (out <= 1.0 + 1e-6)))
+                            # For integer triad counts over width, spatial mean is exact
+                            if width % int(triads) == 0:
+                                np.testing.assert_allclose(
+                                    out.mean(axis=1, dtype=np.float64), expected_mean, atol=1e-6
+                                )
+                            cur_std = float(out.std())
+                            self.assertLessEqual(cur_std, prev_std + 1e-7)
+                            prev_std = cur_std
+                            if smoothness == 1.0:
+                                np.testing.assert_allclose(out, expected_mean, atol=1e-6)
+
+        # Verify exact Gaussian harmonic attenuation factors u and u^4 at smoothness = 0.5
+        s = 0.5
+        u = 1.0 - s
+        smooth_m2 = masking.apply_dynamic2_mask(ones, 180, smoothness=s, mitigation=0.0)
+        spec_s = np.fft.rfft(smooth_m2[0] - 0.375, axis=0) / width
+        np.testing.assert_allclose(np.abs(spec_s[180]), 0.25 * u, atol=1e-6)
+        np.testing.assert_allclose(np.abs(spec_s[360]), 0.0625 * (u ** 4), atol=1e-6)
+
+        # Case 6: Integer pixels-per-triad pixel alignment (phosphor centers at 1/6, 3/6, 5/6)
+        p3 = masking.apply_dynamic2_mask(ones, width / 3, smoothness=0.0, mitigation=0.0)
+        np.testing.assert_allclose(
+            p3[0, :3],
+            [[1.0, 0.25, 0.25], [0.25, 1.0, 0.25], [0.25, 0.25, 1.0]],
+            atol=1e-6,
+        )
+        p5 = masking.apply_dynamic2_mask(ones, width / 5, smoothness=0.0, mitigation=0.0)
+        self.assertAlmostEqual(float(p5[0, 2, 1]), 1.0, places=6)
+        np.testing.assert_allclose(p5[0, 0, 0], p5[0, 4, 2], atol=1e-6)
+
+        # Case 7: Out-of-range pixel values (e.g. slight fp16 overshoot) do not invert mask phase
+        overshoot = np.full((1, width, 3), [-0.01, 1.01, 1.2], dtype=np.float32)
+        out_over = masking.apply_dynamic2_mask(overshoot, 180, smoothness=0.0, mitigation=1.0)
+        np.testing.assert_allclose(out_over, overshoot, atol=1e-6)
 
     def test_monochrome_sizes_and_brightness(self):
         tiles = ([1, 0], [1, 1, 0], [1, 1, 0, 0], [1, 1, 1, 0, 0])
