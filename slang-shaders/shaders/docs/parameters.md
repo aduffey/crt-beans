@@ -24,27 +24,59 @@ Note that the maximum spot size will affect the brightness of the overall image 
 
 This parameter sets the mask simulation type.
 
+| Value | Mask |
+| --- | --- |
+| 0 | Disabled |
+| 1 | Subpixel |
+| 2 | Dynamic (default) |
+| 3 | Dynamic2 |
+| 4 | Monochrome |
+
 The dynamic mask is the default. It will have the specified number of phosphor triads regardless of the output monitor's resolution, for a consistent "look" across devices. It does not depend on the monitor's subpixel arrangement, so it can be used on OLEDs with non-standard subpixels, in TATE mode (rotated), etc. Very low resolution monitors (especially lower than 1080p) may have trouble with the dynamic mask.
 
 The subpixel mask is an alternative for low resolution devices. Note that the number of phosphor triads that the subpixel mask simulates will vary depending on the output monitor's resolution. The "look" will therefore not be consistent across different resolutions. Because this mask type relies on awareness of the monitor's subpixel pattern, it will not work correctly for some monitors or orientations (e.g. TATE mode).
 
-Currently, both mask types (subpixel and dynamic) simulate an [aperture grille](https://en.wikipedia.org/wiki/Aperture_grille).
+Dynamic2 is an alternative dynamic [aperture grille](https://en.wikipedia.org/wiki/Aperture_grille) synthesized from up to the first two harmonics of the phosphor pulse wave. It phases in the first harmonic over `[2.0, 3.0]` and the second harmonic over `[4.0, 5.0]` pixels per triad (`OutputSize.x / mask_triads`) via `smoothstep`. Rather than lifting dark gaps with an additive floor as soon as brightness exceeds the base mean (`dc_base = 0.5 - 0.125 * t2`), it blends per color channel by blooming bright phosphors—scaling the mask linearly up to `dc_base`, then shedding the second harmonic before the first as brightness increases so peaks stay at `1.0`, spatial mean is preserved, and black gaps remain dark deeper into midtones—and applies `t1` post-bloom so the `[2.0, 3.0]` transition attenuates uniformly across darks, midtones, and highlights. Like dynamic, it uses the dynamic mask triad count and does not regime-lock to the monitor's subpixel arrangement. Subpixel and dynamic also simulate aperture grilles.
+
+Monochrome repeats white and black output pixels horizontally, splitting each repeat evenly and assigning an odd repeat's extra pixel to white. It applies the same mask value to all three color channels, preserving the input colors. It shares the static mask width with subpixel, supports periods of 2–5 pixels, and is independent of the dynamic triad count and monitor subpixel arrangement.
 
 Disabling the mask is recommended for low resolution devices with uncommon subpixel layouts (e.g. the Steam Deck OLED) or to simulate masks with very high phosphor density (e.g. good CRT monitors).
 
-Masks have no brightness cost. The underlying scanline is blended into the image in bright areas so that the brightness is not reduced.
+With mask brightness boost at 1.0, the underlying scanline is blended into the image in bright areas to compensate for the mask's brightness loss.
+
+### Mask smoothness
+
+Ranges from 0.0 (default) to 1.0:
+
+- **Dynamic:** scales the raised-cosine filter kernel width by `1 + smoothness`, from the original width at 0.0 to twice that width at 1.0.
+- **Dynamic2:** applies a DC-preserving Gaussian low-pass filter to the harmonic amplitudes around each channel's mean (`(1 - smoothness)` for the first harmonic and `(1 - smoothness)^4` for the second), softening phosphor edges first and reducing mask contrast monotonically to flat at `1.0` without changing overall brightness.
+
+Smoothness has no effect on the static masks (subpixel and monochrome) or when masking is disabled. The Python reference exposes the same control as `--mask-smoothness` with `--mask-type dynamic` (also called `bandlimit`) or `dynamic2`.
 
 ### Dynamic mask triads
 
-This parameter controls the resolution of the phosphor mask for the dynamic mask type only. A value of 550 means that there will be 550 of each of the red, green, and blue phosphors across the simulated screen width.
+This parameter controls the resolution of the phosphor mask for both dynamic and dynamic2. A value of 550 means that there will be 550 of each of the red, green, and blue phosphors across the simulated screen width.
 
-This has no effect when the mask type is set to disabled or subpixel.
+This has no effect when the mask type is set to disabled, subpixel, or monochrome.
 
-### Subpixel mask pattern and width
+### Static mask width and monitor subpixel pattern
 
-The monitor subpixel pattern should be set to match the monitor. If it is not, the mask may look distorted.
+Static mask width controls how many monitor pixels are used for each repeating unit in both subpixel and monochrome masks. It supports 2, 3, 4, and 5 pixels (shader default: 4). For subpixel, each repeat represents one phosphor triad. For example, a value of 5.0 means that a 4k display would simulate `(2160 * (4/3)) / 5 = 576` phosphor triads across a 4:3 image.
 
-The subpixel mask width controls how many monitor pixels are used for each phosphor triad. For example, a value of 5.0 means that a 4k display would simulate `(2160 * (4/3)) / 5 = 576` phosphor triads across a 4:3 image.
+For monochrome, each repeat consists of:
+
+| Width | White pixels | Black pixels |
+| --- | --- | --- |
+| 2 | 1 | 1 |
+| 3 | 2 | 1 |
+| 4 | 2 | 2 |
+| 5 | 3 | 2 |
+
+Mask brightness boost accounts for the active fraction at each width. Static mask width has no effect on dynamic masks or when masking is disabled.
+
+The monitor subpixel pattern (RGB/BGR) applies only to the subpixel mask and should match the monitor. If it does not, the subpixel mask may look distorted. It has no effect on monochrome.
+
+The shader width parameter retains its internal ID `SubpixelMaskPattern` so saved subpixel presets keep their settings. The Python reference uses the existing `--mask-pattern` indices for both static masks: 0=2 pixels, 1=3 pixels, 2=4 pixels, 3=5 pixels. Its existing default remains index 1 (3 pixels), stored as `SimulationConfig.subpixel_mask_pattern`.
 
 ### Mask brightness boost
 

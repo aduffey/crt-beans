@@ -129,13 +129,14 @@ vec4 subpixel_aperture_grille(vec2 coord, vec4 output_size, float subpixel_patte
 //     output_size: <x_size, y_size, 1 / x_size, 1 / y_size>
 //         (equivalent to the Retroarch-provided OutputSize uniform)
 //     mask_triads: The number of phosphor triads to generate across the screen
+//     smoothness: Scales the kernel width from 1x (0) to 2x (1).
 //
 // Returns:
 //     A vec4 with the rgb components containing the rgb values to apply the
 //     mask on the current pixel, and the a component containing the mask
 //     coverage (the inverse of the integral of the mask). In this case, the
 //     mask coverage is always 3.0.
-vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
+vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads, float smoothness) {
     // Loops are unrolled and common terms collapsed for performance.
     const vec3[3] phosphors = {
         vec3(1.0, 0.0, 0.0),
@@ -143,8 +144,8 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
         vec3(0.0, 0.0, 1.0)
     };
     // All units are in terms of phosphors (i.e. 1 == phosphor width).
-    // Set the kernel radius to be one output pixel wide.
-    float kernel_radius = 3.0 * mask_triads * output_size.z;
+    // Set the kernel radius to one to two output pixels.
+    float kernel_radius = 3.0 * mask_triads * output_size.z * (1.0 + smoothness);
     float x = 3.0 * mask_triads * coord.x;
     vec3 mask = vec3(0.0);
     if (kernel_radius < 0.5) {
@@ -167,9 +168,7 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
                 (p2 - p1) * (x2 + sin(PI * x2) / PI);
         mask *= 0.5;
     }
-    else { // kernel_radius < 1.5
-        // For a kernel radius >= 1.5, we should have even more terms, but the
-        // mask starts to look bad before then anyway.
+    else if (kernel_radius < 1.5) {
         float x1 = clamp((x - (round(x) - 1.0)) / kernel_radius, -1.0, 1.0);
         float x2 = clamp((x - (round(x) + 0.0)) / kernel_radius, -1.0, 1.0);
         float x3 = clamp((x - (round(x) + 1.0)) / kernel_radius, -1.0, 1.0);
@@ -182,9 +181,72 @@ vec4 dynamic_aperture_grille(vec2 coord, vec4 output_size, float mask_triads) {
                 (p2 - p1) * (x2 + sin(PI * x2) / PI) +
                 (p3 - p2) * (x3 + sin(PI * x3) / PI);
         mask *= 0.5;
+    } else {
+        // Wider kernels can span more than three phosphor edges. Integrate
+        // every transition inside the support of the raised cosine.
+        float start = floor(x - kernel_radius);
+        vec3 p0 = phosphors[int(mod(start, 3.0) + 1e-3)];
+        mask = p0;
+        for (float edge = start + 1.0; edge < x + kernel_radius; edge += 1.0) {
+            vec3 p1 = p0.brg;
+            float u = (x - edge) / kernel_radius;
+            mask += (p1 - p0) * (0.5 + 0.5 * (u + sin(PI * u) / PI));
+            p0 = p1;
+        }
     }
 
     return vec4(mask, 3.0);
+}
+
+// Harmonic aperture grille that phases in the first and second harmonics via
+// smoothstep based on pixels per triad, blends per-channel by blooming bright
+// phosphors (shedding the second harmonic before the first), and applies a
+// DC-preserving Gaussian smoothness filter.
+vec3 apply_dynamic2_mask(
+    vec3 pixel_value,
+    vec2 coord,
+    vec4 output_size,
+    float mask_triads,
+    float smoothness,
+    float mitigation
+) {
+    float p = output_size.x / mask_triads;
+    float t1 = smoothstep(2.0, 3.0, p);
+    float t2 = smoothstep(4.0, 5.0, p);
+    float dc0 = 1.0 - 0.5 * t1 - 0.125 * t2;
+    float dc_base = 0.5 - 0.125 * t2;
+
+    // Align R, G, B phosphor centers at 1/6, 3/6, 5/6 of each triad to match
+    // dynamic_aperture_grille and pixel centers when p is an integer.
+    float phase = 2.0 * PI * mask_triads * coord.x - PI / 3.0;
+    float cs = cos(phase);
+    float sn = sin(phase);
+    vec3 c1 = vec3(cs, -0.5 * cs + 0.86602540378 * sn, -0.5 * cs - 0.86602540378 * sn);
+    vec3 c2 = 2.0 * c1 * c1 - 1.0;
+
+    vec3 v = pixel_value * mix(dc0, 1.0, mitigation);
+
+    // Scale linearly up to dc_base, then bloom (shed 2nd harmonic first, then
+    // 1st) while keeping peaks <= 1 and spatial mean == v. Apply t1 post-bloom
+    // so the [2, 3] transition attenuates uniformly across all brightnesses.
+    vec3 v_scaled = v / dc_base;
+    vec3 a1 = t1 * max(min(0.5 * min(v_scaled, vec3(1.0)), 1.0 - v), vec3(0.0));
+    vec3 a2 = max(min(0.125 * t2 * v_scaled, 0.5 - v), vec3(0.0));
+
+    // Apply DC-preserving Gaussian smoothness around mean v: H(n) = (1 - s)^(n^2).
+    float u = 1.0 - smoothness;
+    float u2 = u * u;
+    return v + (a1 * u) * c1 + (a2 * (u2 * u2)) * c2;
+}
+
+// Static 2-5 pixel repeats: WB, WWB, WWBB, WWWBB, independent of subpixels.
+// Split each repeat evenly, assigning an odd repeat's extra pixel to white.
+vec4 monochrome_mask(vec2 coord, vec4 output_size, float pixels_per_repeat) {
+    float white_pixels = floor((pixels_per_repeat + 1.0) / 2.0);
+    // Sample pixel centers so floating-point mod cannot misclassify wrap edges.
+    float x = floor(coord.x * output_size.x) + 0.5;
+    float value = mod(x, pixels_per_repeat) < white_pixels ? 1.0 : 0.0;
+    return vec4(vec3(value), pixels_per_repeat / white_pixels);
 }
 
 // Blend the mask with the current pixel value and return the result.

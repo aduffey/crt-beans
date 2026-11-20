@@ -31,7 +31,7 @@ def blend_mask(
     Returns:
         Blended image array of same shape and float32 dtype.
     """
-    if np.isclose(mask_coverage, 1.0) or mask_coverage <= 1.0:
+    if mask_coverage <= 1.0:
         return pixel_value
 
     cov = np.float32(mask_coverage)
@@ -109,27 +109,27 @@ def coverage_mask_taichi(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads: f
     return mask
 
 
-def generate_bandlimit_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
+def generate_bandlimit_mask(shape: tuple[int, ...], mask_triads: float, smoothness: float = 0.0) -> tuple[np.ndarray, float]:
     out_height, out_width = shape[:2]
     field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
-    bandlimit_mask_fragment(field_out, mask_triads)
+    bandlimit_mask_fragment(field_out, mask_triads, smoothness)
     return field_out, 3.0
 
 
 @ti.kernel
-def bandlimit_mask_fragment(field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2), mask_triads: float):
+def bandlimit_mask_fragment(field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2), mask_triads: float, smoothness: float):
     (out_height, out_width) = field_out.shape
     OutputSize = tm.vec4(out_width, out_height, 1 / out_width, 1 / out_height)
     for y, x in field_out:
         vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
-        field_out[y, x] = bandlimit_mask_taichi2(vTexCoord, OutputSize, mask_triads)
+        field_out[y, x] = bandlimit_mask_taichi2(vTexCoord, OutputSize, mask_triads, smoothness)
     return
 
 
 @ti.func
-def bandlimit_mask_taichi2(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads: float) -> tm.vec3:
+def bandlimit_mask_taichi2(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads: float, smoothness: float) -> tm.vec3:
     # With unrolled loops and common terms collapsed for performance
-    w = (mask_triads * 3.0) / OutputSize.x
+    w = (mask_triads * 3.0) / OutputSize.x * (1.0 + smoothness)
     x = mask_triads * 3.0 * vTexCoord.x
     mask = tm.vec3(0.0)
     if w < 0.5:
@@ -148,7 +148,7 @@ def bandlimit_mask_taichi2(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads:
             (p1 - p0) * (np.pi * x1 + tm.sin(np.pi * x1)) + \
             (p2 - p1) * (np.pi * x2 + tm.sin(np.pi * x2))
         mask /= 2.0 * np.pi
-    else:  # w < 1.5
+    elif w < 1.5:
         x1 = tm.clamp((x - (tm.round(x) - 1.0)) / w, -1.0, 1.0)
         x2 = tm.clamp((x - tm.round(x)) / w, -1.0, 1.0)
         x3 = tm.clamp((x - (tm.round(x) + 1.0)) / w, -1.0, 1.0)
@@ -161,8 +161,84 @@ def bandlimit_mask_taichi2(vTexCoord: tm.vec2, OutputSize: tm.vec4, mask_triads:
             (p2 - p1) * (np.pi * x2 + tm.sin(np.pi * x2)) + \
             (p3 - p2) * (np.pi * x3 + tm.sin(np.pi * x3))
         mask /= 2.0 * np.pi
+    else:
+        start = tm.floor(x - w)
+        p0 = phosphors[int(start) % 3]
+        mask = p0
+        edge = start + 1.0
+        while edge < x + w:
+            p1 = p0.brg
+            u = (x - edge) / w
+            mask += (p1 - p0) * (0.5 + 0.5 * (u + tm.sin(np.pi * u) / np.pi))
+            p0 = p1
+            edge += 1.0
 
     return tm.clamp(mask, 0.0, 1.0)
+
+
+def apply_dynamic2_mask(
+    pixel_value: np.ndarray,
+    mask_triads: float,
+    smoothness: float = 0.0,
+    mitigation: float = 1.0,
+) -> np.ndarray:
+    """Shader dynamic2: harmonic aperture grille with per-channel harmonic bloom
+    blending and DC-preserving Gaussian smoothness, matching apply_dynamic2_mask
+    in slang-shaders/shaders/mask.inc.
+    """
+    out_width = pixel_value.shape[1]
+
+    def smoothstep(a: float, b: float, x: float) -> float:
+        t = np.clip((x - a) / (b - a), 0.0, 1.0)
+        return float(t * t * (3.0 - 2.0 * t))
+
+    p = out_width / mask_triads
+    t1 = smoothstep(2.0, 3.0, p)
+    t2 = smoothstep(4.0, 5.0, p)
+    dc0 = 1.0 - 0.5 * t1 - 0.125 * t2
+    dc_base = 0.5 - 0.125 * t2
+
+    # Align R, G, B phosphor centers at 1/6, 3/6, 5/6 of each triad.
+    phase = 2.0 * np.pi * mask_triads * (np.arange(out_width) + 0.5) / out_width - np.pi / 3.0
+    cs, sn = np.cos(phase), np.sin(phase)
+    c1 = np.stack((cs, -0.5 * cs + 0.86602540378 * sn,
+                   -0.5 * cs - 0.86602540378 * sn), axis=-1).astype(np.float32)
+    c2 = (2.0 * c1 * c1 - 1.0).astype(np.float32)
+
+    img = np.asarray(pixel_value, dtype=np.float32)
+    dc0_f = np.float32(dc0)
+    dc_base_f = np.float32(dc_base)
+    t1_f = np.float32(t1)
+    t2_f = np.float32(t2)
+    mit_f = np.float32(mitigation)
+
+    v = img * (dc0_f * (np.float32(1.0) - mit_f) + mit_f)
+    v_scaled = v / dc_base_f
+    a1 = t1_f * np.maximum(
+        np.minimum(np.float32(0.5) * np.minimum(v_scaled, np.float32(1.0)), np.float32(1.0) - v),
+        np.float32(0.0),
+    )
+    a2 = np.maximum(
+        np.minimum(np.float32(0.125) * t2_f * v_scaled, np.float32(0.5) - v),
+        np.float32(0.0),
+    )
+
+    u = np.float32(1.0 - smoothness)
+    u2 = u * u
+    out = v + (a1 * u) * c1 + (a2 * (u2 * u2)) * c2
+    return out.astype(np.float32)
+
+
+def generate_monochrome_mask(shape: tuple[int, ...], mask_pattern: int = 1) -> tuple[np.ndarray, float]:
+    """Static monochrome grille: WB, WWB, WWBB, or WWWBB."""
+    if mask_pattern not in (0, 1, 2, 3):
+        raise AssertionError('Unhandled mask pattern')
+    out_height, out_width = shape[:2]
+    period = mask_pattern + 2
+    white_pixels = (period + 1) // 2
+    row = (np.arange(out_width) % period < white_pixels)
+    mask = np.broadcast_to(row[None, :, None], (out_height, out_width, 3))
+    return mask.astype(np.float32), period / white_pixels
 
 
 def generate_additive_mask(shape: tuple[int, ...], mask_triads: float) -> tuple[np.ndarray, float]:
@@ -341,6 +417,7 @@ def apply_mask(
     mask_amount: float = 1.0,
     *,
     mask_mitigation: float = None,
+    mask_smoothness: float = 0.0,
 ) -> np.ndarray:
     if mask_type in (None, 'none', 'disabled', False):
         return img
@@ -350,8 +427,12 @@ def apply_mask(
 
     if mask_type == 'subpixel':
         mask, coverage = generate_subpixel_mask(shape, mask_pattern)
-    elif mask_type == 'bandlimit':
-        mask, coverage = generate_bandlimit_mask(shape, mask_triads)
+    elif mask_type in ('bandlimit', 'dynamic'):
+        mask, coverage = generate_bandlimit_mask(shape, mask_triads, mask_smoothness)
+    elif mask_type == 'dynamic2':
+        return apply_dynamic2_mask(img, mask_triads, mask_smoothness, mitigation)
+    elif mask_type == 'monochrome':
+        mask, coverage = generate_monochrome_mask(shape, mask_pattern)
     elif mask_type == 'coverage':
         mask, coverage = generate_coverage_mask(shape, mask_triads)
     elif mask_type == 'additive':
@@ -362,7 +443,7 @@ def apply_mask(
         mask, coverage = generate_tiled_mask(shape, tiled_mask_type, mask_triads)
     else:
         raise ValueError(
-            f"Unknown mask type: {mask_type}. Supported types: 'subpixel', 'bandlimit', 'coverage', 'additive', 'tiled', 'none'."
+            f"Unknown mask type: {mask_type}. Supported types: 'subpixel', 'bandlimit'/'dynamic', 'dynamic2', 'monochrome', 'coverage', 'additive', 'additive2', 'tiled', 'none'."
         )
 
     return blend_mask(mask, img, coverage, mitigation)
