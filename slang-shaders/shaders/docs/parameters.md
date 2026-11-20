@@ -110,8 +110,7 @@ All bandwidth values are in MHz.
 | --- | --- | --- | --- |
 | Video bandwidth | RGB | 4.0 | 0.6–6.0 |
 | Luma bandwidth | S-Video and NTSC | 4.0 | 0.6–6.0 |
-| Chroma bandwidth | S-Video | 1.0 | 0.6–1.6 |
-| Chroma bandwidth | NTSC | 1.0 | 0.6–6.0 |
+| Chroma bandwidth | S-Video and NTSC | 1.0 | 0.6–2.0 |
 
 Video bandwidth applies the same filtering to all three RGB channels. Chroma bandwidth applies the same filtering to both color channels.
 
