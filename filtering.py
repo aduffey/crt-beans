@@ -316,25 +316,27 @@ def luma_trap_sample(
 ) -> float:
     """Apply the carrier-locked triangle-windowed luma trap to a filtered scanline."""
     luma = field_yuv[y, x].x
-    if strength > 0.0:
+    if strength > 0.0 and periods_per_active_line > 0.0:
         width = 3.0 * samples / periods_per_active_line
-        width_rcp = 1.0 / width
-        omega_c = 2.0 * np.pi * periods_per_active_line / samples
-        radius = int(tm.floor(width))
-        trap = 0.0
-        norm = 0.0
-        for i in range(1, radius + 1):
-            c = tm.cos(i * omega_c)
-            w = (1.0 - i * width_rcp) * c
-            pos_luma = 0.0
-            neg_luma = 0.0
-            if x + i < samples:
-                pos_luma = field_yuv[y, x + i].x
-            if x - i >= 0:
-                neg_luma = field_yuv[y, x - i].x
-            trap += w * (pos_luma + neg_luma - 2.0 * luma)
-            norm += 2.0 * w * (c - 1.0)
-        luma -= strength * trap / norm
+        if width >= 6.0:
+            width_rcp = 1.0 / width
+            omega_c = 2.0 * np.pi * periods_per_active_line / samples
+            radius = int(tm.floor(width))
+            trap = 0.0
+            norm = 0.0
+            for i in range(1, radius + 1):
+                c = tm.cos(i * omega_c)
+                w = (1.0 - i * width_rcp) * c
+                pos_luma = 0.0
+                neg_luma = 0.0
+                if x + i < samples:
+                    pos_luma = field_yuv[y, x + i].x
+                if x - i >= 0:
+                    neg_luma = field_yuv[y, x - i].x
+                trap += w * (pos_luma + neg_luma - 2.0 * luma)
+                norm += 2.0 * w * (c - 1.0)
+            if norm > 1.0e-5:
+                luma -= strength * trap / norm
     return luma
 
 

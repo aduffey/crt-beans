@@ -42,26 +42,33 @@ void main() {
     ivec2 texel_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
     vec3 filtered = texelFetch(Source, texel_loc, 0).rgb;
 
-    if (params.LumaTrapDepth > 0.0) {
+    if (params.LumaTrapDepth > 0.0 && ci.periods_per_active_line > 0.0) {
         // Attenuate luma near the chroma subcarrier with a carrier-locked
         // triangle-windowed notch spanning 3 subcarrier periods on each side.
+        // Bypass when the subcarrier exceeds Nyquist (fewer than 2 samples per
+        // carrier period, i.e., width < 6.0), where the discrete trap aliases
+        // and its normalization denominator can vanish or change sign.
         float width = 3.0 * params.SourceSize.x / ci.periods_per_active_line;
-        float width_rcp = 1.0 / width;
-        float omega_c = 2.0 * PI * ci.periods_per_active_line * params.SourceSize.z;
-        int radius = int(floor(width));
-        float trap = 0.0;
-        float norm = 0.0;
-        for (int i = 1; i <= radius; i++) {
-            float c = cos(float(i) * omega_c);
-            float w = (1.0 - float(i) * width_rcp) * c;
-            vec2 offset = vec2(float(i) * params.SourceSize.z, 0.0);
-            float pos_luma = textureLod(Source, vTexCoord + offset, 0.0).r;
-            float neg_luma = textureLod(Source, vTexCoord - offset, 0.0).r;
-            trap += w * (pos_luma + neg_luma - 2.0 * filtered.r);
-            norm += 2.0 * w * (c - 1.0);
+        if (width >= 6.0) {
+            float width_rcp = 1.0 / width;
+            float omega_c = 2.0 * PI * ci.periods_per_active_line * params.SourceSize.z;
+            int radius = int(floor(width));
+            float trap = 0.0;
+            float norm = 0.0;
+            for (int i = 1; i <= radius; i++) {
+                float c = cos(float(i) * omega_c);
+                float w = (1.0 - float(i) * width_rcp) * c;
+                vec2 offset = vec2(float(i) * params.SourceSize.z, 0.0);
+                float pos_luma = textureLod(Source, vTexCoord + offset, 0.0).r;
+                float neg_luma = textureLod(Source, vTexCoord - offset, 0.0).r;
+                trap += w * (pos_luma + neg_luma - 2.0 * filtered.r);
+                norm += 2.0 * w * (c - 1.0);
+            }
+            if (norm > 1.0e-5) {
+                float strength = 1.0 - pow(10.0, -clamp(params.LumaTrapDepth, 0.0, 32.0) / 20.0);
+                filtered.r -= strength * trap / norm;
+            }
         }
-        float strength = 1.0 - pow(10.0, -clamp(params.LumaTrapDepth, 0.0, 32.0) / 20.0);
-        filtered.r -= strength * trap / norm;
     }
 
     // Modulate

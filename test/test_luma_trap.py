@@ -15,12 +15,12 @@ import filtering
 
 def check_ntsc_pipeline():
     image = np.random.default_rng(42).uniform(0.1, 0.9, (4, 32, 3)).astype(np.float32)
-    baseline = filtering.simulate_ntsc(image, samples=64)
-    bypass = filtering.simulate_ntsc(image, samples=64, ntsc_luma_trap_depth=0.0)
+    baseline = filtering.simulate_ntsc(image, samples=900)
+    bypass = filtering.simulate_ntsc(image, samples=900, ntsc_luma_trap_depth=0.0)
     np.testing.assert_array_equal(bypass, baseline)
-    trapped = filtering.simulate_ntsc(image, samples=64, ntsc_luma_trap_depth=32.0)
+    trapped = filtering.simulate_ntsc(image, samples=900, ntsc_luma_trap_depth=32.0)
     dispatched = filtering.simulate_analog(
-        image, analog_type='ntsc', samples=64, ntsc_luma_trap_depth=32.0,
+        image, analog_type='ntsc', samples=900, ntsc_luma_trap_depth=32.0,
     )
     np.testing.assert_array_equal(dispatched, trapped)
     assert np.all(np.isfinite(trapped))
@@ -142,6 +142,61 @@ class TestLumaTrap(unittest.TestCase):
         self.assertLess(float(output[..., 0].max()), 1.06)
         self.assertLess(float(output[..., 0].min()), -0.02)
         self.assertGreater(float(output[..., 0].min()), -0.06)
+
+    def test_sub_nyquist_bypasses_without_nan_or_blowup(self):
+        strength = filtering.luma_trap_strength(32.0)
+        rng = np.random.default_rng(7)
+        cases = [
+            ('radius_zero', 50, 170.6667),
+            ('width_one', 50, 150.0),
+            ('s_half', 100, 200.0),
+            ('s_one', 200, 200.0),
+            ('near_norm_root', 200, 200.0 / 1.14223),
+            ('zero_periods', 64, 0.0),
+        ]
+        for label, samples, periods in cases:
+            with self.subTest(case=label):
+                yuv = rng.uniform(0.1, 0.9, (2, samples, 3)).astype(np.float32)
+                source = ti.Vector.field(3, dtype=ti.f32)
+                output = ti.Vector.field(3, dtype=ti.f32)
+                builder = ti.FieldsBuilder()
+                builder.dense(ti.ij, (2, samples)).place(source, output)
+                tree = builder.finalize()
+                try:
+                    source.from_numpy(yuv)
+                    filtering.taichi_luma_trap_fragment(source, output, periods, strength)
+                    result = output.to_numpy()
+                finally:
+                    tree.destroy()
+                self.assertTrue(np.all(np.isfinite(result)))
+                np.testing.assert_array_equal(result, yuv)
+
+        # At exact Nyquist (s = 2.0, width = 6.0), the trap remains well-conditioned.
+        samples = 400
+        periods = 200.0
+        yuv = np.zeros((1, samples, 3), dtype=np.float32)
+        yuv[0, ::2, 0] = 0.8
+        yuv[0, 1::2, 0] = 0.2
+        source = ti.Vector.field(3, dtype=ti.f32)
+        output = ti.Vector.field(3, dtype=ti.f32)
+        builder = ti.FieldsBuilder()
+        builder.dense(ti.ij, (1, samples)).place(source, output)
+        tree = builder.finalize()
+        try:
+            source.from_numpy(yuv)
+            filtering.taichi_luma_trap_fragment(source, output, periods, strength)
+            result = output.to_numpy()
+        finally:
+            tree.destroy()
+        self.assertTrue(np.all(np.isfinite(result)))
+        self.assertLess(float(np.std(result[0, 20:-20, 0])), 0.02)
+
+        # End-to-end simulate_ntsc at sub-Nyquist sample count stays finite and bypasses trap.
+        small_img = rng.uniform(0.1, 0.9, (4, 32, 3)).astype(np.float32)
+        baseline = filtering.simulate_ntsc(small_img, samples=50, ntsc_luma_trap_depth=0.0)
+        trapped = filtering.simulate_ntsc(small_img, samples=50, ntsc_luma_trap_depth=32.0)
+        self.assertTrue(np.all(np.isfinite(trapped)))
+        np.testing.assert_array_equal(trapped, baseline)
 
     def test_ntsc_default_is_exact_bypass_and_dispatches_depth(self):
         check_ntsc_pipeline()
