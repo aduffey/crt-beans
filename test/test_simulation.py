@@ -311,40 +311,50 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertEqual(out.shape, (3, 32, 3))
         self.assertTrue(np.all(np.isfinite(out)))
 
-    def test_ntsc_carrier_exact_interpolator_invariants(self):
-        # Verify algebraic invariants of the 4-tap carrier-exact comb interpolator
+    def test_ntsc_lagrange_interpolator_invariants(self):
+        # Verify algebraic invariants of the 4-tap cubic Lagrange comb interpolator
         import taichi as ti
         import taichi.math as tm
 
         @ti.kernel
-        def eval_kernel(u: float, wc: float) -> tm.vec4:
-            return filtering.carrier_exact_4tap(u, wc)
+        def eval_kernel(u: float) -> tm.vec4:
+            return filtering.lagrange_4tap(u)
 
         # Nodes relative to midpoint u in [-0.5, 0.5]
         nodes = np.array([-1.5, -0.5, 0.5, 1.5], dtype=np.float64)
-        for wc in [1.1914, 1.2709, 1.3069]:
-            for u in np.linspace(-0.5, 0.5, 11):
-                w_vec = eval_kernel(float(u), float(wc))
-                w = np.array([w_vec.x, w_vec.y, w_vec.z, w_vec.w], dtype=np.float64)
+        for u in np.linspace(-0.5, 0.5, 11):
+            w_vec = eval_kernel(float(u))
+            w = np.array([w_vec.x, w_vec.y, w_vec.z, w_vec.w], dtype=np.float64)
 
-                # 1. Partition of unity (exact DC preservation: sum w_k == 1)
-                self.assertAlmostEqual(float(np.sum(w)), 1.0, places=6)
+            # 1. Partition of unity and cubic polynomial exactness (degree <= 3)
+            for degree in range(4):
+                self.assertAlmostEqual(float(np.sum((nodes ** degree) * w)), float(u ** degree), places=6)
 
-                # 2. Linear moment preservation (sum x_k w_k == u)
-                self.assertAlmostEqual(float(np.sum(nodes * w)), float(u), places=6)
+            # 2. Bounded Lebesgue constant (L1 norm <= 1.25)
+            self.assertLessEqual(float(np.sum(np.abs(w))), 1.25 + 1e-6)
 
-                # 3. Exact response at carrier frequency wc
-                expected = np.exp(1j * u * wc)
-                actual = np.sum(w * np.exp(1j * nodes * wc))
-                self.assertAlmostEqual(float(np.real(actual)), float(np.real(expected)), places=6)
-                self.assertAlmostEqual(float(np.imag(actual)), float(np.imag(expected)), places=6)
+        # 3. Kronecker delta at exact grid points
+        w_left = np.array(eval_kernel(-0.5), dtype=np.float64)
+        np.testing.assert_allclose(w_left, [0.0, 1.0, 0.0, 0.0], atol=1e-6)
 
-            # 4. Kronecker delta at exact grid points
-            w_left = np.array(eval_kernel(-0.5, float(wc)), dtype=np.float64)
-            np.testing.assert_allclose(w_left, [0.0, 1.0, 0.0, 0.0], atol=1e-6)
+        w_right = np.array(eval_kernel(0.5), dtype=np.float64)
+        np.testing.assert_allclose(w_right, [0.0, 0.0, 1.0, 0.0], atol=1e-6)
 
-            w_right = np.array(eval_kernel(0.5, float(wc)), dtype=np.float64)
-            np.testing.assert_allclose(w_right, [0.0, 0.0, 1.0, 0.0], atol=1e-6)
+        # 4. Previously singular carrier multiples (wc = pi at 340, wc = 2*pi at 170) stay finite
+        flat = np.full((8, 255, 3), 0.5, dtype=np.float32)
+        expected = float(0.5 ** 2.4)
+        out_nyquist = filtering.simulate_ntsc(
+            flat, samples=340, ntsc_samples=340,
+            ntsc_system='nes', ntsc_filter_type='adaptive',
+        )
+        self.assertTrue(np.all(np.isfinite(out_nyquist)))
+        np.testing.assert_allclose(out_nyquist[:, 20:-20], expected, atol=1e-3, rtol=0)
+
+        out_aliased = filtering.simulate_ntsc(
+            flat, samples=170, ntsc_samples=170,
+            ntsc_system='nes', ntsc_filter_type='adaptive',
+        )
+        self.assertTrue(np.all(np.isfinite(out_aliased)))
 
     def test_ntsc_chroma_lpf_carrier_nulls(self):
         # Carrier-locked Hann window of half-width W = 1.5 * samples / periods_per_active_line

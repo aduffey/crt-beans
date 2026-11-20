@@ -182,31 +182,24 @@ def chroma_carrier(t: float, line: int, frame_count: int,
 
 
 @ti.func
-def carrier_exact_4tap(u: float, wc: float) -> tm.vec4:
-    c1 = tm.cos(0.5 * wc)
-    c3 = tm.cos(1.5 * wc)
-    cu = tm.cos(u * wc)
-    s1 = tm.sin(0.5 * wc)
-    s3 = tm.sin(1.5 * wc)
-    su = tm.sin(u * wc)
-
-    e3 = 0.5 * (cu - c1) / (c3 - c1)
+def lagrange_4tap(u: float) -> tm.vec4:
+    u2 = u * u - 0.25
+    e3 = 0.25 * u2
     e1 = 0.5 - e3
-    o3 = (0.5 * su - u * s1) / (s3 - 3.0 * s1)
+    o3 = (1.0 / 6.0) * u * u2
     o1 = u - 3.0 * o3
-
     return tm.vec4(e3 - o3, e1 - o1, e1 + o1, e3 + o3)
 
 
 @ti.func
-def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int, wc: float) -> tm.vec3:
+def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int) -> tm.vec3:
     result = tm.vec3(0.0, 0.0, 0.0)
     if 0 <= target_y < height:
         texel_coord = coord_x * samples
         texel_floor = tm.floor(texel_coord - 0.5)
         d = (texel_coord - 0.5) - texel_floor
         u = d - 0.5
-        w = carrier_exact_4tap(u, wc)
+        w = lagrange_4tap(u)
         base_x = int(texel_floor)
         for k in ti.static([-1, 0, 1, 2]):
             weight = 0.0
@@ -444,7 +437,6 @@ def taichi_ntsc_decode_comb(
 ):
     (height, samples) = field_in.shape
     line_step = 2 if interlaced != 0 else 1
-    wc = 2.0 * np.pi * (periods_per_active_line / samples)
     for y, x in field_out:
         u = (x + 0.5) / samples
         middle = field_in[y, x]
@@ -470,8 +462,8 @@ def taichi_ntsc_decode_comb(
                     lower_chroma = tm.vec2(s.y, s.z)
                     lower_luma = s.w
             else:
-                upper_sample = interpolate_chroma(u - offset, y - line_step, field_in, samples, height, wc)
-                lower_sample = interpolate_chroma(u + offset, y + line_step, field_in, samples, height, wc)
+                upper_sample = interpolate_chroma(u - offset, y - line_step, field_in, samples, height)
+                lower_sample = interpolate_chroma(u + offset, y + line_step, field_in, samples, height)
                 upper_chroma = tm.vec2(upper_sample.x, upper_sample.y)
                 upper_luma = upper_sample.z
                 lower_chroma = tm.vec2(lower_sample.x, lower_sample.y)

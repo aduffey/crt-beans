@@ -28,16 +28,15 @@ layout(location = 0) out vec2 vTexCoord;
 layout(location = 1) flat out vec4 vWeightsUpper;
 layout(location = 2) flat out vec4 vWeightsLower;
 
-vec4 carrier_exact_4tap(float offset_x, float source_w, float wc) {
+vec4 lagrange_4tap(float offset_x, float source_w) {
     float delta_texels = offset_x * source_w;
     float d = delta_texels - floor(delta_texels);
     float u = d - 0.5;
-    float c1 = cos(0.5 * wc), c3 = cos(1.5 * wc), cu = cos(u * wc);
-    float s1 = sin(0.5 * wc), s3 = sin(1.5 * wc), su = sin(u * wc);
+    float u2 = u * u - 0.25;
 
-    float e3 = 0.5 * (cu - c1) / (c3 - c1);
+    float e3 = 0.25 * u2;
     float e1 = 0.5 - e3;
-    float o3 = (0.5 * su - u * s1) / (s3 - 3.0 * s1);
+    float o3 = (1.0 / 6.0) * u * u2;
     float o1 = u - 3.0 * o3;
 
     return vec4(e3 - o3, e1 - o1, e1 + o1, e3 + o3);
@@ -49,11 +48,10 @@ void main() {
 
     chroma_info ci = get_chroma_info(params.System, params.OriginalSize);
     float offset = (227.5 - ci.periods_per_line) / ci.periods_per_active_line;
-    float wc = 2.0 * PI * (ci.periods_per_active_line * params.SourceSize.z);
 
     if (params.FilterType > 0.5 && offset != 0.0) {
-        vWeightsUpper = carrier_exact_4tap(-offset, params.SourceSize.x, wc);
-        vWeightsLower = carrier_exact_4tap( offset, params.SourceSize.x, wc);
+        vWeightsUpper = lagrange_4tap(-offset, params.SourceSize.x);
+        vWeightsLower = lagrange_4tap( offset, params.SourceSize.x);
     } else {
         vWeightsUpper = vec4(0.0);
         vWeightsLower = vec4(0.0);
