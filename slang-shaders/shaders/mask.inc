@@ -246,11 +246,15 @@ vec3 apply_dynamic2_mask(
 // Static 2-5 pixel repeats: WB, WWB, WWBB, WWWBB, independent of subpixels.
 // Split each repeat evenly, assigning an odd repeat's extra pixel to white.
 vec4 monochrome_mask(vec2 coord, vec4 output_size, float pixels_per_repeat) {
-    float white_pixels = floor((pixels_per_repeat + 1.0) / 2.0);
+    int period = int(round(pixels_per_repeat));
+    if (period < 2) {
+        return vec4(1.0);
+    }
+    int white_pixels = (period + 1) / 2;
     // Sample pixel centers so floating-point mod cannot misclassify wrap edges.
     float x = floor(coord.x * output_size.x) + 0.5;
-    float value = mod(x, pixels_per_repeat) < white_pixels ? 1.0 : 0.0;
-    return vec4(vec3(value), pixels_per_repeat / white_pixels);
+    float value = mod(x, float(period)) < float(white_pixels) ? 1.0 : 0.0;
+    return vec4(vec3(value), float(period) / float(white_pixels));
 }
 
 // Blend the mask with the current pixel value and return the result.
