@@ -32,5 +32,5 @@ layout(binding = 1) uniform sampler2D Source;
 void main() {
     ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
     vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
-    FragColor.rgb = gamma_to_linear(rgb, CRT_GAMMA);
+    FragColor = vec4(gamma_to_linear(rgb, CRT_GAMMA), 1.0);
 }

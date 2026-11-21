@@ -36,5 +36,5 @@ layout(binding = 1) uniform sampler2D Source;
 void main() {
     vec3 L = 1.0 / (vec3(params.Bandwidth) * 52.5 * 2.0);
     vec3 filtered = low_pass(L, vTexCoord, params.SourceSize, Source);
-    FragColor.rgb = gamma_to_linear(filtered, CRT_GAMMA);
+    FragColor = vec4(gamma_to_linear(filtered, CRT_GAMMA), 1.0);
 }

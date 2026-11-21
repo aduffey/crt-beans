@@ -76,5 +76,5 @@ void main() {
         value += textureLod(Source, vec2(vTexCoord.x, vTexCoord.y + delta), 0.0).rgb * scale;
     }
 
-    FragColor.rgb = value / weight_sum;
+    FragColor = vec4(value / weight_sum, 1.0);
 }

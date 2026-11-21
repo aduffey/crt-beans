@@ -82,5 +82,5 @@ void main() {
 
     // We'll just demodulate here, too, to save a pass.
     vec2 chroma = 2.0 * composite * carriers;
-    FragColor.rgb = vec3(composite, chroma.r, chroma.g);
+    FragColor = vec4(composite, chroma.r, chroma.g, 1.0);
 }

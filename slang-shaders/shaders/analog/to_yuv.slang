@@ -34,5 +34,5 @@ void main() {
     vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
 
     // We assume the input is in native CRT gamma.
-    FragColor.rgb = gamma_to_yuv(rgb);
+    FragColor = vec4(gamma_to_yuv(rgb), 1.0);
 }

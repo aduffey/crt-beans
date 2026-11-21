@@ -41,5 +41,5 @@ void main() {
     // them appropriately.
     vec3 L = 1.0 / (vec3(params.LumaBandwidth, params.ChromaBandwidth, params.ChromaBandwidth) * 52.5 * 2.0);
     vec3 filtered = low_pass(L, vTexCoord, params.SourceSize, Source);
-    FragColor.rgb = yuv_to_linear(filtered);
+    FragColor = vec4(yuv_to_linear(filtered), 1.0);
 }

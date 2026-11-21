@@ -62,5 +62,5 @@ layout(binding = 1) uniform sampler2D Source;
 #include "scanline_horizontal.inc"
 
 void main() {
-    FragColor.rgb = render_scanline_horizontal(vTexCoord, delta);
+    FragColor = uvec4(render_scanline_horizontal(vTexCoord, delta), 0u);
 }

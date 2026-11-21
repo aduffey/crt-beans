@@ -105,5 +105,5 @@ void main() {
         luma /= luma_weight_sum;
     }
 
-    FragColor.rgb = yuv_to_linear(vec3(luma, chroma.r, chroma.g));
+    FragColor = vec4(yuv_to_linear(vec3(luma, chroma.r, chroma.g)), 1.0);
 }
