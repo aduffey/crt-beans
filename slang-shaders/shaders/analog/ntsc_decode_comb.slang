@@ -63,7 +63,7 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) flat in vec4 vWeightsUpper;
 layout(location = 2) flat in vec4 vWeightsLower;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
 
 vec3 interpolate4(vec2 center_coord, vec4 w) {
     vec3 result = w.x * textureLodOffset(Source, center_coord, 0.0, ivec2(-1, 0)).gba;

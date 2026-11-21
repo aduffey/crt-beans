@@ -26,7 +26,7 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
 
 /* This is a 2x downscale using a 4x4 cubic kernel. This results in less
  * aliasing and better stability than bilinear downscaling.

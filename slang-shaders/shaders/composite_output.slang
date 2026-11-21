@@ -29,9 +29,9 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
-layout(binding = 2) uniform sampler2D Scanlines;
-layout(binding = 3) uniform sampler2D BlueNoiseTex;
+layout(set = 0, binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 2) uniform sampler2D Scanlines;
+layout(set = 0, binding = 3) uniform sampler2D BlueNoiseTex;
 
 // Plastic constant R2 sequence for 2D toroidal spatial jump
 const uvec2 R2 = uvec2(3242171952u, 2447432860u);

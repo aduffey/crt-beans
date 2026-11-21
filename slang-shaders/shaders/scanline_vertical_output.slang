@@ -48,7 +48,7 @@ void main() {
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) in vec2 viewportCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform usampler2D Source;
+layout(set = 0, binding = 1) uniform usampler2D Source;
 
 #include "colorspace/conversions.inc"
 #include "scanline_vertical.inc"

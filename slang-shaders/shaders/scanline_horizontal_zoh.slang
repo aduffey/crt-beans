@@ -56,7 +56,7 @@ void main() {
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) flat in float delta;
 layout(location = 0) out uvec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
 
 #define FORCE_ZOH
 #include "scanline_horizontal.inc"
