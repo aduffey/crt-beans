@@ -470,15 +470,30 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertAlmostEqual(pce_256.periods_per_line, 227.5)
         self.assertAlmostEqual(pce_256.offset_per_frame, 0.5)
 
+        pce_282 = filtering.chroma_info_pce(282.0)
+        self.assertAlmostEqual(pce_282.periods_per_active_line, (4.0 / 6.0) * 282.0)
+
+        pce_300 = filtering.chroma_info_pce(300.0)
+        self.assertAlmostEqual(pce_300.periods_per_active_line, (3.0 / 6.0) * 300.0)
+
         pce_320 = filtering.chroma_info_pce(320.0)
         self.assertAlmostEqual(pce_320.periods_per_active_line, (3.0 / 6.0) * 320.0)
         self.assertAlmostEqual(pce_320.periods_per_line, 227.5)
         self.assertAlmostEqual(pce_320.offset_per_frame, 0.5)
 
+        pce_377 = filtering.chroma_info_pce(377.0)
+        self.assertAlmostEqual(pce_377.periods_per_active_line, (3.0 / 6.0) * 377.0)
+
         pce_512 = filtering.chroma_info_pce(512.0)
         self.assertAlmostEqual(pce_512.periods_per_active_line, (2.0 / 6.0) * 512.0)
         self.assertAlmostEqual(pce_512.periods_per_line, 227.5)
         self.assertAlmostEqual(pce_512.offset_per_frame, 0.5)
+
+        pce_565 = filtering.chroma_info_pce(565.0)
+        self.assertAlmostEqual(pce_565.periods_per_active_line, (2.0 / 6.0) * 565.0)
+
+        pce_1120 = filtering.chroma_info_pce(1120.0)
+        self.assertAlmostEqual(pce_1120.periods_per_active_line, (1.0 / 6.0) * 1120.0)
 
         # Genesis
         gen_h32 = filtering.chroma_info_genesis(256.0)

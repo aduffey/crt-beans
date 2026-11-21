@@ -80,12 +80,14 @@ chroma_info chroma_info_pce(vec4 original_size) {
     // https://www.pcengine-fx.com/forums/index.php?topic=11550.0
     // https://pcengine.proboards.com/thread/639/screen-resolution-setup-sprite-limits?page=2
 
-    // Default to 512 px mode (2/6 cycles per dot)
+    // Default to 512 px / 10.74 MHz mode (2/6 cycles per dot)
     float periods_per_active_line = 2.0 / 6.0 * original_size.x;
-    if (original_size.x <= 280.0) { // 256px mode (4/6 cycles per dot)
+    if (original_size.x < 300.0) { // 256 px / 5.37 MHz mode (4/6 cycles per dot, up to ~282 with overscan)
         periods_per_active_line = 4.0 / 6.0 * original_size.x;
-    } else if (original_size.x <= 375.0) { // 320/352px mode (3/6 cycles per dot)
+    } else if (original_size.x < 450.0) { // 320/352 px / 7.16 MHz mode (3/6 cycles per dot, ~300-377)
         periods_per_active_line = 3.0 / 6.0 * original_size.x;
+    } else if (original_size.x > 700.0) { // Mixed-resolution MCLK-rate frame (1/6 cycles per dot, e.g. 1024/1120)
+        periods_per_active_line = 1.0 / 6.0 * original_size.x;
     }
 
     return chroma_info(periods_per_active_line, 227.5, 0.5);

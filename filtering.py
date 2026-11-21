@@ -42,10 +42,12 @@ def chroma_info_sms(original_width: float) -> ChromaInfo:
 
 def chroma_info_pce(original_width: float) -> ChromaInfo:
     periods_per_active_line = (2.0 / 6.0) * original_width
-    if original_width <= 280.0:
+    if original_width < 300.0:
         periods_per_active_line = (4.0 / 6.0) * original_width
-    elif original_width <= 375.0:
+    elif original_width < 450.0:
         periods_per_active_line = (3.0 / 6.0) * original_width
+    elif original_width > 700.0:
+        periods_per_active_line = (1.0 / 6.0) * original_width
     return ChromaInfo(periods_per_active_line, 227.5, 0.5)
 
 
