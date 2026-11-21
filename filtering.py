@@ -52,7 +52,9 @@ def chroma_info_pce(original_width: float) -> ChromaInfo:
 
 
 def chroma_info_genesis(original_width: float) -> ChromaInfo:
-    if original_width > 300.0:
+    if original_width > 1000.0:
+        periods_per_active_line = (2.0 / 15.0) * original_width
+    elif original_width > 300.0:
         periods_per_active_line = (8.0 / 15.0) * original_width
     else:
         periods_per_active_line = (10.0 / 15.0) * original_width
@@ -89,6 +91,8 @@ def chroma_info_psx(original_width: float) -> ChromaInfo:
         periods_per_active_line = original_width * 7.0 / 15.0
     elif original_width <= 560.0:
         periods_per_active_line = original_width * 5.0 / 15.0
+    elif original_width > 2000.0:
+        periods_per_active_line = original_width * 1.0 / 15.0
     return ChromaInfo(periods_per_active_line, 227.5, 0.5)
 
 

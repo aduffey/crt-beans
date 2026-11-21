@@ -506,6 +506,15 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertAlmostEqual(gen_h40.periods_per_line, 228.0)
         self.assertAlmostEqual(gen_h40.offset_per_frame, 0.0)
 
+        gen_ares = filtering.chroma_info_genesis(1280.0)
+        self.assertAlmostEqual(gen_ares.periods_per_active_line, (2.0 / 15.0) * 1280.0)
+        self.assertAlmostEqual(gen_ares.periods_per_active_line, gen_h40.periods_per_active_line)
+        self.assertAlmostEqual(gen_ares.periods_per_line, 228.0)
+        self.assertAlmostEqual(gen_ares.offset_per_frame, 0.0)
+
+        gen_ares_os = filtering.chroma_info_genesis(1415.0)
+        self.assertAlmostEqual(gen_ares_os.periods_per_active_line, (2.0 / 15.0) * 1415.0)
+
         # SNES
         snes_256 = filtering.chroma_info_snes(256.0)
         self.assertAlmostEqual(snes_256.periods_per_active_line, (4.0 / 6.0) * 256.0)
@@ -563,6 +572,15 @@ class TestAnalogSimulation(unittest.TestCase):
         self.assertAlmostEqual(psx_640.periods_per_active_line, 640.0 * 4.0 / 15.0)
         self.assertAlmostEqual(psx_640.periods_per_line, 227.5)
         self.assertAlmostEqual(psx_640.offset_per_frame, 0.5)
+
+        psx_ares = filtering.chroma_info_psx(2560.0)
+        self.assertAlmostEqual(psx_ares.periods_per_active_line, 2560.0 * 1.0 / 15.0)
+        self.assertAlmostEqual(psx_ares.periods_per_active_line, psx_640.periods_per_active_line)
+        self.assertAlmostEqual(psx_ares.periods_per_line, 227.5)
+        self.assertAlmostEqual(psx_ares.offset_per_frame, 0.5)
+
+        psx_ares_os = filtering.chroma_info_psx(2800.0)
+        self.assertAlmostEqual(psx_ares_os.periods_per_active_line, 2800.0 * 1.0 / 15.0)
 
         # N64
         n64 = filtering.chroma_info_n64()

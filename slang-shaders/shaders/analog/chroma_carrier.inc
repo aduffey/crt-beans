@@ -113,8 +113,9 @@ chroma_info chroma_info_genesis(vec4 original_size) {
     // See: http://gendev.spritesmind.net/forum/viewtopic.php?f=2&t=3221
 
     float periods_per_active_line;
-    // TODO handle if upscaled
-    if (original_size.x > 300.0) { // H40
+    if (original_size.x > 1000.0) { // MCLK/2 mixed-res grid (e.g. ares: 1280/1415/1495)
+        periods_per_active_line = 2.0 / 15.0 * original_size.x;
+    } else if (original_size.x > 300.0) { // H40
         periods_per_active_line = 8.0 / 15.0 * original_size.x;
     } else { // H32
         periods_per_active_line = 10.0 / 15.0 * original_size.x;
@@ -195,6 +196,11 @@ chroma_info chroma_info_psx(vec4 original_size) {
     // would complicate things significantly. For now, let's assume the correct
     // value is 3412.5 and we have the standard NTSC line length.
     //
+    // At least one source seems to have tested a PSX and found that the line
+    // length is 3412.5 cycles *on average*. It could be flipping between
+    // 3412 and 3413 each line or something like that, but for now we'll assume
+    // that each line is 3412.5 cycles long.
+    //
     // There are 263 lines per frame, so we flip the phase each frame. This
     // might give us a hint regarding the line length as well, because if the
     // line length was 227.5333..., there would be no point using 263 lines
@@ -212,7 +218,9 @@ chroma_info chroma_info_psx(vec4 original_size) {
     // 256, 320, 512, and 640 modes all simplify to 512 / 3 periods per active
     // line. The 368 mode is slightly different.
     //
-    // See: https://psx-spx.consoledev.net/dev/ps1/gpu/timings/
+    // See:
+    // https://psx-spx.consoledev.net/dev/ps1/gpu/timings/
+    // https://github.com/psx-spx/psx-spx.github.io/pull/137
 
     // These bounds should work with SwanStation and Beetle PSX, at least.
     // It's not clear if other cores might add more padding.
@@ -226,6 +234,8 @@ chroma_info chroma_info_psx(vec4 original_size) {
         periods_per_active_line = original_size.x * 7.0 / 15.0;
     } else if (original_size.x <= 560.0) {
         periods_per_active_line = original_size.x * 5.0 / 15.0;
+    } else if (original_size.x > 2000.0) { // Raw 53.69 MHz GPU-clock grid (e.g. ares: 2560/2800)
+        periods_per_active_line = original_size.x * 1.0 / 15.0;
     }
     return chroma_info(periods_per_active_line, 227.5, 0.5);
 }
