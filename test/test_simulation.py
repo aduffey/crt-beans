@@ -794,8 +794,9 @@ class TestMaskTypes(unittest.TestCase):
         np.testing.assert_allclose(np.abs(spec_m2_mid[320]), 0.25, atol=1e-6)
         np.testing.assert_allclose(np.abs(spec_m2_mid[640]), 0.03125, atol=1e-6)
 
-        # Case 3b: Post-bloom t1 attenuation in (2.0, 3.0) is uniform across darks, midtones, highlights
-        # p = 2.5 (triads = 576) -> t1 = 0.5, t2 = 0.0 -> a1 = 0.5 * min(v, 1 - v)
+        # Case 3b: Transition zone (2.0 < p < 3.0) at both mitigation=1.0 and mitigation=0.0
+        # p = 2.5 (triads = 576) -> t1 = 0.5, t2 = 0.0, dc0 = 0.75
+        # At mitigation=1.0: uniform post-bloom t1 attenuation -> a1 = 0.5 * min(v, 1 - v)
         rgb_t1 = np.full((1, width, 3), [0.25, 0.50, 0.75], dtype=np.float32)
         out_t1 = masking.apply_dynamic2_mask(rgb_t1, 576, smoothness=0.0, mitigation=1.0)
         np.testing.assert_allclose(out_t1.mean(axis=1, dtype=np.float64), rgb_t1[:, 0], atol=1e-6)
@@ -803,6 +804,26 @@ class TestMaskTypes(unittest.TestCase):
         np.testing.assert_allclose(np.abs(spec_t1[576, 0]), (0.5 * 0.25) / 2.0, atol=1e-6)
         np.testing.assert_allclose(np.abs(spec_t1[576, 1]), (0.5 * 0.50) / 2.0, atol=1e-6)
         np.testing.assert_allclose(np.abs(spec_t1[576, 2]), (0.5 * 0.25) / 2.0, atol=1e-6)
+
+        # At mitigation=0.0: pure linear mask multiplication with no premature blooming
+        # Check 1080p/550 (p = 2.618) across rows [0.5, 0.75, 1.0]: scales strictly linearly and white hits 1.0
+        levels = np.array([0.50, 0.75, 1.00], dtype=np.float32)
+        rgb_nomit = np.broadcast_to(levels[:, None, None], (3, width, 3)).copy()
+        out_nomit = masking.apply_dynamic2_mask(rgb_nomit, 550, smoothness=0.0, mitigation=0.0)
+        p_550 = width / 550.0
+        t1_550 = smoothstep(2.0, 3.0, p_550)
+        dc0_550 = 1.0 - 0.5 * t1_550
+        np.testing.assert_allclose(
+            out_nomit.mean(axis=1, dtype=np.float64),
+            np.broadcast_to((levels * dc0_550)[:, None], (3, 3)),
+            atol=1e-6,
+        )
+        # Scaling property: out(pv) == pv * out(1.0) for all pv in [0, 1]
+        np.testing.assert_allclose(out_nomit[0], 0.50 * out_nomit[2], atol=1e-5)
+        np.testing.assert_allclose(out_nomit[1], 0.75 * out_nomit[2], atol=1e-5)
+        # White contrast strictly exceeds 75% gray contrast and peaks reach ~1.0
+        self.assertGreater(float(np.ptp(out_nomit[2])), float(np.ptp(out_nomit[1])))
+        self.assertGreater(float(out_nomit[2].max()), 1.0 - 1e-3)
 
         # Case 4: Per-channel harmonic bloom regimes (p = 8.0 -> t1 = 1, t2 = 1, dc0 = 0.375, dc1 = 0.5)
         # Ch0 = 0.25 (<= dc0), Ch1 = 0.45 (dc0 < v <= 0.5), Ch2 = 0.75 (> 0.5)
@@ -846,11 +867,10 @@ class TestMaskTypes(unittest.TestCase):
                             out = masking.apply_dynamic2_mask(img, triads, smoothness, mit)
                             self.assertTrue(np.all(np.isfinite(out)))
                             self.assertTrue(np.all((out >= -1e-6) & (out <= 1.0 + 1e-6)))
-                            # For integer triad counts over width, spatial mean is exact
-                            if width % int(triads) == 0:
-                                np.testing.assert_allclose(
-                                    out.mean(axis=1, dtype=np.float64), expected_mean, atol=1e-6
-                                )
+                            # For integer triad counts, discrete spatial mean is exact across width
+                            np.testing.assert_allclose(
+                                out.mean(axis=1, dtype=np.float64), expected_mean, atol=1e-6
+                            )
                             cur_std = float(out.std())
                             self.assertLessEqual(cur_std, prev_std + 1e-7)
                             prev_std = cur_std

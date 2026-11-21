@@ -197,6 +197,9 @@ def apply_dynamic2_mask(
     t2 = smoothstep(4.0, 5.0, p)
     dc0 = 1.0 - 0.5 * t1 - 0.125 * t2
     dc_base = 0.5 - 0.125 * t2
+    dc_knee = dc0 * (1.0 - mitigation) + dc_base * mitigation
+    cap_denom = t1 * (1.0 - mitigation) + mitigation
+    cap_scale = (t1 / cap_denom) if cap_denom > 0.0 else 0.0
 
     # Align R, G, B phosphor centers at 1/6, 3/6, 5/6 of each triad.
     phase = 2.0 * np.pi * mask_triads * (np.arange(out_width) + 0.5) / out_width - np.pi / 3.0
@@ -207,15 +210,19 @@ def apply_dynamic2_mask(
 
     img = np.asarray(pixel_value, dtype=np.float32)
     dc0_f = np.float32(dc0)
-    dc_base_f = np.float32(dc_base)
+    dc_knee_f = np.float32(dc_knee)
+    cap_scale_f = np.float32(cap_scale)
     t1_f = np.float32(t1)
     t2_f = np.float32(t2)
     mit_f = np.float32(mitigation)
 
     v = img * (dc0_f * (np.float32(1.0) - mit_f) + mit_f)
-    v_scaled = v / dc_base_f
-    a1 = t1_f * np.maximum(
-        np.minimum(np.float32(0.5) * np.minimum(v_scaled, np.float32(1.0)), np.float32(1.0) - v),
+    v_scaled = v / dc_knee_f
+    a1 = np.maximum(
+        np.minimum(
+            np.float32(0.5) * t1_f * np.minimum(v_scaled, np.float32(1.0)),
+            cap_scale_f * (np.float32(1.0) - v),
+        ),
         np.float32(0.0),
     )
     a2 = np.maximum(

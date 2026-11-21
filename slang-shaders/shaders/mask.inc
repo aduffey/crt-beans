@@ -215,6 +215,9 @@ vec3 apply_dynamic2_mask(
     float t2 = smoothstep(4.0, 5.0, p);
     float dc0 = 1.0 - 0.5 * t1 - 0.125 * t2;
     float dc_base = 0.5 - 0.125 * t2;
+    float dc_knee = mix(dc0, dc_base, mitigation);
+    float cap_denom = mix(t1, 1.0, mitigation);
+    float cap_scale = (cap_denom > 0.0) ? (t1 / cap_denom) : 0.0;
 
     // Align R, G, B phosphor centers at 1/6, 3/6, 5/6 of each triad to match
     // dynamic_aperture_grille and pixel centers when p is an integer.
@@ -226,11 +229,12 @@ vec3 apply_dynamic2_mask(
 
     vec3 v = pixel_value * mix(dc0, 1.0, mitigation);
 
-    // Scale linearly up to dc_base, then bloom (shed 2nd harmonic first, then
-    // 1st) while keeping peaks <= 1 and spatial mean == v. Apply t1 post-bloom
-    // so the [2, 3] transition attenuates uniformly across all brightnesses.
-    vec3 v_scaled = v / dc_base;
-    vec3 a1 = t1 * max(min(0.5 * min(v_scaled, vec3(1.0)), 1.0 - v), vec3(0.0));
+    // Scale linearly up to dc_knee (sliding from dc0 at mitigation=0 for pure
+    // linear masking to dc_base at mitigation=1 for uniform post-bloom t1
+    // attenuation), then bloom (shed 2nd harmonic first, then 1st) while
+    // keeping peaks <= 1 and spatial mean == v.
+    vec3 v_scaled = v / dc_knee;
+    vec3 a1 = max(min(0.5 * t1 * min(v_scaled, vec3(1.0)), cap_scale * (1.0 - v)), vec3(0.0));
     vec3 a2 = max(min(0.125 * t2 * v_scaled, 0.5 - v), vec3(0.0));
 
     // Apply DC-preserving Gaussian smoothness around mean v: H(n) = (1 - s)^(n^2).
