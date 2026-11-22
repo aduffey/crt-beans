@@ -318,8 +318,8 @@ def luma_trap_sample(
     """Apply the carrier-locked triangle-windowed luma trap to a filtered scanline."""
     luma = field_yuv[y, x].x
     if strength > 0.0 and periods_per_active_line > 0.0:
-        width = 3.0 * samples / periods_per_active_line
-        if width >= 6.0:
+        width = 2.0 * samples / periods_per_active_line
+        if width >= 4.0:
             width_rcp = 1.0 / width
             omega_c = 2.0 * np.pi * periods_per_active_line / samples
             radius = int(tm.floor(width))

@@ -44,12 +44,12 @@ void main() {
 
     if (params.LumaTrapDepth > 0.0 && ci.periods_per_active_line > 0.0) {
         // Attenuate luma near the chroma subcarrier with a carrier-locked
-        // triangle-windowed notch spanning 3 subcarrier periods on each side.
+        // triangle-windowed notch spanning 2 subcarrier periods on each side.
         // Bypass when the subcarrier exceeds Nyquist (fewer than 2 samples per
-        // carrier period, i.e., width < 6.0), where the discrete trap aliases
+        // carrier period, i.e., width < 4.0), where the discrete trap aliases
         // and its normalization denominator can vanish or change sign.
-        float width = 3.0 * params.SourceSize.x / ci.periods_per_active_line;
-        if (width >= 6.0) {
+        float width = 2.0 * params.SourceSize.x / ci.periods_per_active_line;
+        if (width >= 4.0) {
             float width_rcp = 1.0 / width;
             float omega_c = 2.0 * PI * ci.periods_per_active_line * params.SourceSize.z;
             int radius = int(floor(width));

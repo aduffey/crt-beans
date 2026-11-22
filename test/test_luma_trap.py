@@ -66,7 +66,7 @@ class TestLumaTrap(unittest.TestCase):
                 strength = filtering.luma_trap_strength(32.0)
                 filtering.taichi_luma_trap_fragment(impulse, output, periods, strength)
                 response = output[0, :, 0]
-                radius = int(np.floor(3.0 * samples / periods))
+                radius = int(np.floor(2.0 * samples / periods))
                 self.assertTrue(np.all(np.isfinite(response)))
                 np.testing.assert_allclose(
                     response[center - radius:center + radius + 1],
@@ -119,16 +119,16 @@ class TestLumaTrap(unittest.TestCase):
         image[:, 1024:, 0] = 1.0
         output = self.filter_yuv(image, 32.0)
         self.assertGreater(float(output[..., 0].max()), 1.02)
-        self.assertLess(float(output[..., 0].max()), 1.06)
+        self.assertLess(float(output[..., 0].max()), 1.08)
         self.assertLess(float(output[..., 0].min()), -0.02)
-        self.assertGreater(float(output[..., 0].min()), -0.06)
+        self.assertGreater(float(output[..., 0].min()), -0.08)
 
     def test_sub_nyquist_bypasses_without_nan_or_blowup(self):
         strength = filtering.luma_trap_strength(32.0)
         rng = np.random.default_rng(7)
         cases = [
             ('radius_zero', 50, 170.6667),
-            ('width_one', 50, 150.0),
+            ('width_one', 50, 100.0),
             ('s_half', 100, 200.0),
             ('s_one', 200, 200.0),
             ('near_norm_root', 200, 200.0 / 1.14223),
@@ -142,7 +142,7 @@ class TestLumaTrap(unittest.TestCase):
                 self.assertTrue(np.all(np.isfinite(result)))
                 np.testing.assert_array_equal(result, yuv)
 
-        # At exact Nyquist (s = 2.0, width = 6.0), the trap remains well-conditioned.
+        # At exact Nyquist (s = 2.0, width = 4.0), the trap remains well-conditioned.
         samples = 400
         periods = 200.0
         yuv = np.zeros((1, samples, 3), dtype=np.float32)
