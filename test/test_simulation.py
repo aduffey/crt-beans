@@ -30,7 +30,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.output_resolution, (2160, 2880))
         self.assertEqual(cfg.max_spot_size, 0.9)
         self.assertEqual(cfg.min_spot_size, 0.4)
-        self.assertEqual(cfg.interlacing_type, 'bob')
+        self.assertEqual(cfg.interlacing_type, 'weave')
         self.assertTrue(cfg.odd_field_first)
 
     def test_custom_config(self):
@@ -48,7 +48,7 @@ class TestSimulationConfig(unittest.TestCase):
             mask_type='subpixel',
             diffusion_type='box',
             output_resolution=(240, 320),
-            interlacing_type='weave',
+            interlacing_type='bob',
             odd_field_first=False,
         )
         self.assertFalse(cfg.enable_analog)
@@ -64,7 +64,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.mask_type, 'subpixel')
         self.assertEqual(cfg.diffusion_type, 'box')
         self.assertEqual(cfg.output_resolution, (240, 320))
-        self.assertEqual(cfg.interlacing_type, 'weave')
+        self.assertEqual(cfg.interlacing_type, 'bob')
         self.assertFalse(cfg.odd_field_first)
 
 
@@ -1136,7 +1136,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertTrue(args.diffusion)
         self.assertEqual(args.mask_type, 'bandlimit')
         self.assertEqual(args.diffusion_type, 'gaussian')
-        self.assertEqual(args.interlacing_type, 'bob')
+        self.assertEqual(args.interlacing_type, 'weave')
         self.assertTrue(args.odd_field_first)
 
     def test_parser_overrides(self):
@@ -1153,7 +1153,7 @@ class TestCLIParser(unittest.TestCase):
             '--ntsc-luma-trap-depth', '32',
             '--ntsc-system', 'snes',
             '--ntsc-frame-count', '1',
-            '--interlacing-type', 'weave',
+            '--interlacing-type', 'bob',
             '--no-odd-field-first',
             '--no-masking',
             '--no-diffusion',
@@ -1169,7 +1169,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.ntsc_luma_trap_depth, 32.0)
         self.assertEqual(args.ntsc_system, 'snes')
         self.assertEqual(args.ntsc_frame_count, 1)
-        self.assertEqual(args.interlacing_type, 'weave')
+        self.assertEqual(args.interlacing_type, 'bob')
         self.assertFalse(args.odd_field_first)
         self.assertFalse(args.masking)
         self.assertFalse(args.diffusion)

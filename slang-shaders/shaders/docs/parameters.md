@@ -104,7 +104,7 @@ Displays alternating odd or even fields each frame, simulating a CRT's alternati
 
 There may be noticeable flickering in this mode. In many cases, flickering was noticeable on the original systems and CRT TVs as well. However, some monitors and TVs can have excessive flickering in this mode, [due to the way they work](https://news.ycombinator.com/item?id=42507741), and the flickering may persist temporarily even after the interlaced content is gone.
 
-#### Weave (1.0)
+#### Weave (1.0, default)
 
 Draws both the odd and even fields and blends them together, avoiding the flickering of bob mode. For cores that output 480p, this produces a 480i "look." On true 480i content where the core updates fields alternately in a shared framebuffer, the NTSC simulation maintains per-field subcarrier phase consistency across stale and current fields. Note that there is a performance penalty because twice as many scanlines are evaluated.
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-#pragma parameter InterlacingType "Interlacing type (0: bob, 1: weave, 2: VGA, 3: off)" 0.0 0.0 3.0 1.0
+#pragma parameter InterlacingType "Interlacing type (0: bob, 1: weave, 2: VGA, 3: off)" 1.0 0.0 3.0 1.0
 #pragma parameter OddFieldFirst "Interlacing phase (0: odd field first, 1: even field first)" 0.0 0.0 1.0 1.0
 #pragma parameter OverscanHorizontal "Horizontal overscan (proportion to crop)" 0.0 0.0 0.1 0.01
 #pragma parameter OverscanVertical "Vertical overscan (proportion to crop)" 0.0 0.0 0.1 0.01
 #pragma parameter MaxSpotSize "Maximum scanline size (proportion of line)" 0.90 0.6 1.0 0.05
 #pragma parameter MinSpotSize "Minimum scanline size (proportion of maximum)" 0.4 0.3 1.0 0.1
-#pragma parameter MaskType "Mask type (0:off 1:subpixel 2:dynamic 3:dynamic2 4:monochrome)" 2.0 0.0 4.0 1.0
+#pragma parameter MaskType "Mask type (0:off 1:subpixel 2:dynamic 3:dynamic2 4:monochrome)" 3.0 0.0 4.0 1.0
 #pragma parameter MaskSmoothness "Dynamic mask smoothness" 0.0 0.0 1.0 0.05
 #pragma parameter SubpixelPattern "Monitor subpixel pattern (0: RGB, 1: BGR)" 0.0 0.0 1.0 1.0
 #pragma parameter SubpixelMaskPattern "Static mask width (pixels per repeat)" 4.0 2.0 5.0 1.0

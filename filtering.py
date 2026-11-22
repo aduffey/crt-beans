@@ -679,7 +679,7 @@ def simulate_ntsc(
     ntsc_filter_type: str | float = 'adaptive',
     ntsc_system: str = 'standard',
     ntsc_frame_count: int = 0,
-    interlacing_type: str | float = 'bob',
+    interlacing_type: str | float = 'weave',
     odd_field_first: bool | float = True,
     ntsc_luma_trap_depth: float = 0.0,
     ntsc_samples: int | None = None,
@@ -768,7 +768,7 @@ def simulate_analog(
     ntsc_filter_type: str = 'adaptive',
     ntsc_system: str = 'standard',
     ntsc_frame_count: int = 0,
-    interlacing_type: str | float = 'bob',
+    interlacing_type: str | float = 'weave',
     odd_field_first: bool | float = True,
     ntsc_luma_trap_depth: float = 0.0,
 ) -> np.ndarray:

@@ -25,7 +25,7 @@ class SimulationConfig:
     min_spot_size: float = 0.4
     overscan_horizontal: float = 0.0
     overscan_vertical: float = 0.0
-    interlacing_type: str = 'bob'        # 'bob', 'weave', 'vga', 'none'/'off'
+    interlacing_type: str = 'weave'      # 'bob', 'weave', 'vga', 'none'/'off'
     odd_field_first: bool = True
 
     # For masks

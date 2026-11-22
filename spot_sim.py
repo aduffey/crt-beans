@@ -60,7 +60,7 @@ def get_lines_doubled(v: float, source_y: float) -> tm.vec4:
 
 def spot_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                   overscan_horizontal: float, overscan_vertical: float,
-                  interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                  interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0):
     (out_height, out_width, out_planes) = output_dim
     field_in = np.ascontiguousarray(image_in, dtype=np.float32)
     field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
@@ -91,7 +91,7 @@ def _kernel_spot_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
 
 def taichi_spot_fragment(field_in, field_out, max_spot_size: float, min_spot_size: float,
                          overscan_horizontal: float, overscan_vertical: float,
-                         interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                         interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0):
     _kernel_spot_fragment(field_in, field_out, max_spot_size, min_spot_size,
                           overscan_horizontal, overscan_vertical,
                           interlace_mode, odd_field_first, frame_count)
@@ -311,7 +311,7 @@ def spot_gauss(sample, distance_x, distance_y, max_spot_size: float, min_spot_si
 
 def spot_analytical_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                              overscan_horizontal: float, overscan_vertical: float,
-                             interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                             interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0):
     (out_height, out_width, out_planes) = output_dim
     field_in = np.ascontiguousarray(image_in, dtype=np.float32)
     field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
@@ -342,7 +342,7 @@ def _kernel_spot_analytical_fragment(field_in: ti.types.ndarray(dtype=tm.vec3, n
 
 def taichi_spot_analytical_fragment(field_in, field_out, max_spot_size: float, min_spot_size: float,
                                     overscan_horizontal: float, overscan_vertical: float,
-                                    interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                                    interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0):
     _kernel_spot_analytical_fragment(field_in, field_out, max_spot_size, min_spot_size,
                                      overscan_horizontal, overscan_vertical,
                                      interlace_mode, odd_field_first, frame_count)
@@ -433,7 +433,7 @@ def spot_analytical2(sample: tm.vec3, x: float, x0_: float, x1_: float, y_: floa
 
 def spot_fast_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                        overscan_horizontal: float, overscan_vertical: float,
-                       interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                       interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0):
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
     aspect_ratio = float(out_width) / float(out_height)
@@ -475,7 +475,7 @@ def _kernel_spot_fast_horizontal_fragment(field_in: ti.types.ndarray(dtype=tm.ve
 
 def taichi_spot_fast_horizontal_fragment(field_in, field_out, max_spot_size: float, min_spot_size: float,
                                          overscan_horizontal: float, overscan_vertical: float,
-                                         aspect_ratio: float, interlace_mode: int = 0):
+                                         aspect_ratio: float, interlace_mode: int = 1):
     _kernel_spot_fast_horizontal_fragment(field_in, field_out, max_spot_size, min_spot_size,
                                           overscan_horizontal, overscan_vertical,
                                           aspect_ratio, interlace_mode)
@@ -503,7 +503,7 @@ def _kernel_spot_fast_vertical_fragment(field_in: ti.types.ndarray(dtype=tm.vec3
 
 def taichi_spot_fast_vertical_fragment(field_in, field_out, max_spot_size: float, min_spot_size: float,
                                        overscan_horizontal: float, overscan_vertical: float,
-                                       interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0):
+                                       interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0):
     _kernel_spot_fast_vertical_fragment(field_in, field_out, max_spot_size, min_spot_size,
                                         overscan_horizontal, overscan_vertical,
                                         interlace_mode, odd_field_first, frame_count)
@@ -612,7 +612,7 @@ def spot3_float16(sample: f16vec3, distance_x: f16vec3, distance_y: f16vec3,
 
 def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_size: float,
                         overscan_horizontal: float, overscan_vertical: float,
-                        interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0,
+                        interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0,
                         cubic_horizontal: bool = True, cubic_vertical: bool = True,
                         force_zoh: bool = False):
     (in_height, in_width, in_planes) = image_in.shape
@@ -665,7 +665,7 @@ def _kernel_spot_fast2_horizontal_fragment(field_in: ti.types.ndarray(dtype=tm.v
 def taichi_spot_fast2_horizontal_fragment(field_in, energy_out, width_out,
                                           max_spot_size: float, min_spot_size: float,
                                           overscan_horizontal: float, overscan_vertical: float,
-                                          aspect_ratio: float, interlace_mode: int = 0,
+                                          aspect_ratio: float, interlace_mode: int = 1,
                                           cubic_horizontal: bool = True,
                                           force_zoh: bool = False):
     _kernel_spot_fast2_horizontal_fragment(field_in, energy_out, width_out,
@@ -699,7 +699,7 @@ def _kernel_spot_fast2_vertical_fragment(energy_in: ti.types.ndarray(dtype=tm.ve
 def taichi_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
                                         max_spot_size: float, min_spot_size: float,
                                         overscan_horizontal: float, overscan_vertical: float,
-                                        interlace_mode: int = 0, odd_field_first: int = 1, frame_count: int = 0,
+                                        interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0,
                                         cubic_vertical: bool = True):
     _kernel_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
                                          max_spot_size, min_spot_size,
@@ -900,7 +900,7 @@ def spot_fast2_vertical_cubic(sample: tm.vec3, width: tm.vec3, y_: float, max_sp
 def simulate_spot(image_in, output_dim, method: str,
                   max_spot_size: float, min_spot_size: float,
                   overscan_horizontal: float, overscan_vertical: float,
-                  interlacing_type: str | int | float = 'bob',
+                  interlacing_type: str | int | float = 'weave',
                   odd_field_first: bool | int | float = True,
                   frame_count: int = 0,
                   force_zoh: bool = False):
