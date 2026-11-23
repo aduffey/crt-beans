@@ -105,9 +105,9 @@ def build_parser():
 
     # Scanline options
     parser.add_argument('--scanline-method', '--scanlines', dest='scanline_method',
-                        choices=['sampled', 'fast', 'fast-cosine', 'analytical'],
+                        choices=['sampled', 'fast', 'fast-point', 'fast-cosine', 'analytical'],
                         default=DEFAULT_CONFIG.scanline_method,
-                        help='Scanline simulation method (fast: cubic spot; fast-cosine: raised cosine)')
+                        help='Scanline simulation method (fast: integrated cubic; fast-point: point-sampled cubic; fast-cosine: raised cosine)')
     parser.add_argument('--output-resolution', '--res', dest='output_resolution',
                         nargs=2, type=int, default=list(DEFAULT_CONFIG.output_resolution),
                         metavar=('HEIGHT', 'WIDTH'), help='Output resolution in pixels (height width)')

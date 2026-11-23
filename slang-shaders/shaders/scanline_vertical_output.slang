@@ -13,6 +13,7 @@ layout(push_constant) uniform Push {
     float InterlacingType;
     float OddFieldFirst;
     float OverscanVertical;
+    float MaxSpotSize;
     float MaskType;
     float MaskSmoothness;
     float SubpixelMaskPattern;

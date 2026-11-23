@@ -614,7 +614,7 @@ def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_siz
                         overscan_horizontal: float, overscan_vertical: float,
                         interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0,
                         cubic_horizontal: bool = True, cubic_vertical: bool = True,
-                        force_zoh: bool = False):
+                        integrate_vertical: bool = True, force_zoh: bool = False):
     (in_height, in_width, in_planes) = image_in.shape
     (out_height, out_width, out_planes) = output_dim
     aspect_ratio = float(out_width) / float(out_height)
@@ -631,7 +631,8 @@ def spot_fast2_fragment(image_in, output_dim, max_spot_size: float, min_spot_siz
     taichi_spot_fast2_vertical_fragment(energy_intermediate, width_intermediate, field_out,
                                         max_spot_size, min_spot_size,
                                         overscan_horizontal, overscan_vertical,
-                                        interlace_mode, odd_field_first, frame_count, cubic_vertical)
+                                        interlace_mode, odd_field_first, frame_count,
+                                        cubic_vertical, integrate_vertical)
     return field_out
 
 
@@ -681,7 +682,8 @@ def _kernel_spot_fast2_vertical_fragment(energy_in: ti.types.ndarray(dtype=tm.ve
                                          max_spot_size: float, min_spot_size: float,
                                          overscan_horizontal: float, overscan_vertical: float,
                                          interlace_mode: int, odd_field_first: int, frame_count: int,
-                                         cubic_vertical: ti.template()):
+                                         cubic_vertical: ti.template(),
+                                         integrate_vertical: ti.template()):
     (in_height, in_width) = energy_in.shape
     (out_height, out_width) = field_out.shape
     SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
@@ -692,7 +694,8 @@ def _kernel_spot_fast2_vertical_fragment(energy_in: ti.types.ndarray(dtype=tm.ve
         field_out[y, x] = spot_sim_fast2_vertical(vTexCoord, energy_in, width_in, SourceSize, OutputSize,
                                                   max_spot_size, min_spot_size,
                                                   overscan_horizontal, overscan_vertical,
-                                                  interlace_mode, odd_field_first, frame_count, cubic_vertical)
+                                                  interlace_mode, odd_field_first, frame_count,
+                                                  cubic_vertical, integrate_vertical)
     return
 
 
@@ -700,11 +703,12 @@ def taichi_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
                                         max_spot_size: float, min_spot_size: float,
                                         overscan_horizontal: float, overscan_vertical: float,
                                         interlace_mode: int = 1, odd_field_first: int = 1, frame_count: int = 0,
-                                        cubic_vertical: bool = True):
+                                        cubic_vertical: bool = True, integrate_vertical: bool = True):
     _kernel_spot_fast2_vertical_fragment(energy_in, width_in, field_out,
                                          max_spot_size, min_spot_size,
                                          overscan_horizontal, overscan_vertical,
-                                         interlace_mode, odd_field_first, frame_count, cubic_vertical)
+                                         interlace_mode, odd_field_first, frame_count,
+                                         cubic_vertical, integrate_vertical)
 
 
 
@@ -829,34 +833,126 @@ def evaluate_spot_fast2(vTexCoord: tm.vec2, img: ti.template(), widths: ti.templ
 
 
 @ti.func
+def evaluate_scanline_integrated(u_coord: int, sample_y: int, distance_y: float, half_pixel_height: float,
+                                 img: ti.template(), widths: ti.template(),
+                                 max_spot_size: float, min_width: float) -> tm.vec3:
+    sample = texelFetch(img, tm.ivec2(u_coord, sample_y))
+    width = max(texelFetch(widths, tm.ivec2(u_coord, sample_y)), min_width)
+    return spot_fast2_vertical_cubic_integrated(sample, width, distance_y, half_pixel_height, max_spot_size)
+
+
+@ti.func
+def integrate_progressive(u_coord: int, y: float, half_pixel_height: float, radius: float,
+                          source_height: int, img: ti.template(), widths: ti.template(),
+                          max_spot_size: float, min_width: float) -> tm.vec3:
+    k_start = max(int(tm.floor(y - 0.5 - radius)) + 1, 0)
+    k_stop = min(int(tm.floor(y - 0.5 + radius)), source_height - 1)
+    total = tm.vec3(0.0)
+    for k in range(k_start, k_stop + 1):
+        d = (float(k) + 0.5) - y
+        total += evaluate_scanline_integrated(
+            u_coord, k, d, half_pixel_height, img, widths, max_spot_size, min_width)
+    return total
+
+
+@ti.func
+def integrate_field(u_coord: int, p: float, offset: float, row_offset: int,
+                    half_pixel_height: float, radius: float, source_height: int,
+                    img: ti.template(), widths: ti.template(),
+                    max_spot_size: float, min_width: float) -> tm.vec3:
+    k_start = max(int(tm.floor(p - offset - radius)) + 1, 0)
+    k_stop = min(int(tm.floor(p - offset + radius)), (source_height - 1 - row_offset) // 2)
+    total = tm.vec3(0.0)
+    for k in range(k_start, k_stop + 1):
+        d = (float(k) + offset) - p
+        total += evaluate_scanline_integrated(
+            u_coord, 2 * k + row_offset, d, half_pixel_height, img, widths, max_spot_size, min_width)
+    return total
+
+
+@ti.func
+def integrate_doubled(u_coord: int, y2: float, half_pixel_height: float, radius: float,
+                      source_height: int, img: ti.template(), widths: ti.template(),
+                      max_spot_size: float, min_width: float) -> tm.vec3:
+    k_start = max(int(tm.floor(y2 - 0.5 - radius)) + 1, 0)
+    k_stop = min(int(tm.floor(y2 - 0.5 + radius)), 2 * source_height - 1)
+    total = tm.vec3(0.0)
+    for k in range(k_start, k_stop + 1):
+        d = (float(k) + 0.5) - y2
+        total += evaluate_scanline_integrated(
+            u_coord, k // 2, d, half_pixel_height, img, widths, max_spot_size, min_width)
+    return total
+
+
+@ti.func
 def spot_sim_fast2_vertical(vTexCoord: tm.vec2, img: ti.template(), widths: ti.template(), SourceSize: tm.vec4, OutputSize: tm.vec4,
                             max_spot_size: float, min_spot_size: float,
                             overscan_horizontal: float, overscan_vertical: float,
                             interlace_mode: int, odd_field_first: int, frame_count: int,
-                            cubic_vertical: ti.template() = True) -> tm.vec3:
+                            cubic_vertical: ti.template() = True,
+                            integrate_vertical: ti.template() = True) -> tm.vec3:
     # Overscan (horizontal overscan is handled in the horizontal pass)
     vTexCoord = tm.vec2(vTexCoord.x, (1.0 - overscan_vertical) * (vTexCoord.y - 0.5) + 0.5)
 
     output = tm.vec3(0.0)
-    if interlace_mode == 2 and SourceSize.y < 350.0:
-        lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
-        output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
-    elif interlace_mode >= 2 or SourceSize.y <= 300.0:
-        lines = get_lines_closest(vTexCoord.y, SourceSize.y)
-        output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
-    elif interlace_mode == 1:
-        lines_odd = get_lines_odd(vTexCoord.y, SourceSize.y)
-        lines_even = get_lines_even(vTexCoord.y, SourceSize.y)
-        output = 0.5 * (evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_odd, max_spot_size, min_spot_size, cubic_vertical) +
-                        evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_even, max_spot_size, min_spot_size, cubic_vertical))
-    else:
-        phase = 1 if odd_field_first == 0 else 0
-        if (frame_count + phase) % 2 == 0:
-            lines = get_lines_odd(vTexCoord.y, SourceSize.y)
-            output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
+    if ti.static(integrate_vertical and cubic_vertical):
+        u_coord = int(tm.clamp(tm.floor(vTexCoord.x * SourceSize.x), 0.0, SourceSize.x - 1.0))
+        source_height = int(SourceSize.y)
+        y = vTexCoord.y * SourceSize.y
+        src_pixel_height = (1.0 - overscan_vertical) * SourceSize.y * OutputSize.w
+        min_width = min_spot_size * max_spot_size
+
+        if interlace_mode == 2 and SourceSize.y < 350.0:
+            pixel_height = 2.0 * src_pixel_height
+            half_h = 0.5 * pixel_height
+            radius = max_spot_size + half_h
+            output = integrate_doubled(
+                u_coord, 2.0 * y, half_h, radius, source_height, img, widths, max_spot_size, min_width) / pixel_height
+        elif interlace_mode >= 2 or SourceSize.y <= 300.0:
+            pixel_height = src_pixel_height
+            half_h = 0.5 * pixel_height
+            radius = max_spot_size + half_h
+            output = integrate_progressive(
+                u_coord, y, half_h, radius, source_height, img, widths, max_spot_size, min_width) / pixel_height
+        elif interlace_mode == 1:
+            pixel_height = 0.5 * src_pixel_height
+            half_h = 0.5 * pixel_height
+            radius = max_spot_size + half_h
+            p = 0.5 * y
+            output = (integrate_field(u_coord, p, 0.75, 1, half_h, radius, source_height, img, widths, max_spot_size, min_width) +
+                      integrate_field(u_coord, p, 0.25, 0, half_h, radius, source_height, img, widths, max_spot_size, min_width)) / src_pixel_height
         else:
-            lines = get_lines_even(vTexCoord.y, SourceSize.y)
+            pixel_height = 0.5 * src_pixel_height
+            half_h = 0.5 * pixel_height
+            radius = max_spot_size + half_h
+            p = 0.5 * y
+            phase = 1 if odd_field_first == 0 else 0
+            if (frame_count + phase) % 2 == 0:
+                output = integrate_field(
+                    u_coord, p, 0.25, 0, half_h, radius, source_height, img, widths, max_spot_size, min_width) / pixel_height
+            else:
+                output = integrate_field(
+                    u_coord, p, 0.75, 1, half_h, radius, source_height, img, widths, max_spot_size, min_width) / pixel_height
+    else:
+        if interlace_mode == 2 and SourceSize.y < 350.0:
+            lines = get_lines_doubled(vTexCoord.y, SourceSize.y)
             output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
+        elif interlace_mode >= 2 or SourceSize.y <= 300.0:
+            lines = get_lines_closest(vTexCoord.y, SourceSize.y)
+            output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
+        elif interlace_mode == 1:
+            lines_odd = get_lines_odd(vTexCoord.y, SourceSize.y)
+            lines_even = get_lines_even(vTexCoord.y, SourceSize.y)
+            output = 0.5 * (evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_odd, max_spot_size, min_spot_size, cubic_vertical) +
+                            evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines_even, max_spot_size, min_spot_size, cubic_vertical))
+        else:
+            phase = 1 if odd_field_first == 0 else 0
+            if (frame_count + phase) % 2 == 0:
+                lines = get_lines_odd(vTexCoord.y, SourceSize.y)
+                output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
+            else:
+                lines = get_lines_even(vTexCoord.y, SourceSize.y)
+                output = evaluate_spot_fast2(vTexCoord, img, widths, SourceSize, lines, max_spot_size, min_spot_size, cubic_vertical)
     return output
 
 
@@ -891,10 +987,20 @@ def spot_fast2_vertical(sample: tm.vec3, width: float, y_: float, max_spot_size:
 
 @ti.func
 def spot_fast2_vertical_cubic(sample: tm.vec3, width: tm.vec3, y_: float, max_spot_size: float):
-    # Match the point-sampled cubic profile in scanline_vertical.inc.
+    # Point-sampled cubic vertical profile retained for fast-point comparisons.
     width_rcp = 1.0 / width
     y = tm.clamp(abs(y_) * width_rcp, 0.0, 1.0)
     return sample * max_spot_size * width_rcp * (y * y * (2.0 * y - 3.0) + 1.0)
+
+
+@ti.func
+def spot_fast2_vertical_cubic_integrated(sample: tm.vec3, width: tm.vec3, distance_y: float,
+                                         half_pixel_height: float, max_spot_size: float):
+    # Match the pixel-height-integrated cubic profile in scanline_vertical.inc.
+    width_rcp = 1.0 / width
+    u0 = tm.clamp((distance_y - half_pixel_height) * width_rcp, -1.0, 1.0)
+    u1 = tm.clamp((distance_y + half_pixel_height) * width_rcp, -1.0, 1.0)
+    return sample * max_spot_size * (cubic_primitive(u1) - cubic_primitive(u0))
 
 
 def simulate_spot(image_in, output_dim, method: str,
@@ -912,15 +1018,16 @@ def simulate_spot(image_in, output_dim, method: str,
     elif method == 'analytical':
         return spot_analytical_fragment(image_in, output_dim, max_spot_size, min_spot_size, overscan_horizontal, overscan_vertical,
                                         interlace_mode, odd_phase, frame_count)
-    elif method in ('fast', 'fast2', 'fast-cosine'):
+    elif method in ('fast', 'fast2', 'fast-point', 'fast-cosine'):
         return spot_fast2_fragment(image_in, output_dim, max_spot_size, min_spot_size, overscan_horizontal, overscan_vertical,
                                    interlace_mode, odd_phase, frame_count,
                                    cubic_horizontal=method != 'fast-cosine',
                                    cubic_vertical=method != 'fast-cosine',
+                                   integrate_vertical=method in ('fast', 'fast2'),
                                    force_zoh=force_zoh)
     elif method == 'fast1':
         return spot_fast_fragment(image_in, output_dim, max_spot_size, min_spot_size, overscan_horizontal, overscan_vertical,
                                   interlace_mode, odd_phase, frame_count)
     else:
-        raise ValueError(f"Unknown scanline simulation method: {method}. Supported methods: 'sampled', 'analytical', 'fast', 'fast-cosine'.")
+        raise ValueError(f"Unknown scanline simulation method: {method}. Supported methods: 'sampled', 'analytical', 'fast', 'fast-point', 'fast-cosine'.")
 

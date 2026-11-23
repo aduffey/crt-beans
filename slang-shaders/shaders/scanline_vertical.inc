@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
 
 #include "mask.inc"
-#include "line_handling.inc"
 
-vec3 evaluate_scanline(int x, int y, float distance_y, int source_height) {
-    if (y < 0 || y >= source_height) {
-        return vec3(0.0);
-    }
+// Antiderivative of k(u) = 1 - 3*u^2 + 2*|u|^3 on [-1, 1].
+vec3 vertical_cubic_primitive(vec3 u) {
+    return u * (1.0 + u * u * (0.5 * abs(u) - 1.0));
+}
 
+// Integrate a scanline's vertical profile over [distance_y - half_pixel_height,
+// distance_y + half_pixel_height]. Division by pixel_height is deferred to the
+// caller after summing all contributing scanlines.
+vec3 evaluate_scanline(int x, int y, float distance_y, float half_pixel_height) {
     uvec3 packed_sample = texelFetch(Source, ivec2(x, y), 0).rgb;
     vec2 r = unpackHalf2x16(packed_sample.r);
     vec2 g = unpackHalf2x16(packed_sample.g);
@@ -15,45 +18,85 @@ vec3 evaluate_scanline(int x, int y, float distance_y, int source_height) {
     vec3 sample_value = vec3(r.x, g.x, b.x);
     vec3 width_rcp = vec3(r.y, g.y, b.y);
 
-    vec3 dy = clamp(abs(distance_y) * width_rcp, 0.0, 1.0);
-    return sample_value * ((dy * dy) * (2.0 * dy - 3.0) + 1.0);
+    vec3 u0 = clamp((distance_y - half_pixel_height) * width_rcp, -1.0, 1.0);
+    vec3 u1 = clamp((distance_y + half_pixel_height) * width_rcp, -1.0, 1.0);
+    return sample_value * (vertical_cubic_primitive(u1) - vertical_cubic_primitive(u0));
 }
 
-vec3 scanlines(lines_t lines, int x, int source_height) {
-    return evaluate_scanline(x, lines.upper_sample_y, lines.upper_distance_y, source_height) +
-           evaluate_scanline(x, lines.lower_sample_y, lines.lower_distance_y, source_height);
+vec3 integrate_progressive(int x, float y, float half_pixel_height, float radius, int source_height) {
+    int k_start = max(int(floor(y - 0.5 - radius)) + 1, 0);
+    int k_stop = min(int(floor(y - 0.5 + radius)), source_height - 1);
+    vec3 sum = vec3(0.0);
+    for (int k = k_start; k <= k_stop; ++k) {
+        float d = (float(k) + 0.5) - y;
+        sum += evaluate_scanline(x, k, d, half_pixel_height);
+    }
+    return sum;
+}
+
+vec3 integrate_field(int x, float p, float offset, int row_offset, float half_pixel_height, float radius, int source_height) {
+    int k_start = max(int(floor(p - offset - radius)) + 1, 0);
+    int k_stop = min(int(floor(p - offset + radius)), (source_height - 1 - row_offset) / 2);
+    vec3 sum = vec3(0.0);
+    for (int k = k_start; k <= k_stop; ++k) {
+        float d = (float(k) + offset) - p;
+        sum += evaluate_scanline(x, 2 * k + row_offset, d, half_pixel_height);
+    }
+    return sum;
+}
+
+vec3 integrate_doubled(int x, float y2, float half_pixel_height, float radius, int source_height) {
+    int k_start = max(int(floor(y2 - 0.5 - radius)) + 1, 0);
+    int k_stop = min(int(floor(y2 - 0.5 + radius)), 2 * source_height - 1);
+    vec3 sum = vec3(0.0);
+    for (int k = k_start; k <= k_stop; ++k) {
+        float d = (float(k) + 0.5) - y2;
+        sum += evaluate_scanline(x, k >> 1, d, half_pixel_height);
+    }
+    return sum;
 }
 
 vec3 render_scanlines(vec2 vTexCoord, vec2 viewportCoord) {
     int x = clamp(int(floor(vTexCoord.x * params.SourceSize.x)), 0, int(params.SourceSize.x) - 1);
     int source_height = int(params.SourceSize.y);
+    float y = vTexCoord.y * params.SourceSize.y;
+    float src_pixel_height = (1.0 - params.OverscanVertical) * params.SourceSize.y * params.OutputSize.w;
 
     vec3 value = vec3(0.0);
     if (params.InterlacingType == 2.0 && params.SourceSize.y < 350.0) {
         // VGA line doubling
-        lines_t lines = get_doubled_lines(vTexCoord.y, params.SourceSize);
-        value = scanlines(lines, x, source_height);
+        float pixel_height = 2.0 * src_pixel_height;
+        float half_h = 0.5 * pixel_height;
+        float radius = params.MaxSpotSize + half_h;
+        value = integrate_doubled(x, 2.0 * y, half_h, radius, source_height) / pixel_height;
     } else if (params.InterlacingType >= 2.0 || params.SourceSize.y <= 300.0) {
         // no interlacing
-        lines_t lines = get_closest_lines(vTexCoord.y, params.SourceSize);
-        value = scanlines(lines, x, source_height);
+        float pixel_height = src_pixel_height;
+        float half_h = 0.5 * pixel_height;
+        float radius = params.MaxSpotSize + half_h;
+        value = integrate_progressive(x, y, half_h, radius, source_height) / pixel_height;
     } else if (params.InterlacingType == 1.0) {
         // weave
         // Simulate even and odd fields, then average them together
-        lines_t lines_even = get_even_lines(vTexCoord.y, params.SourceSize);
-        lines_t lines_odd = get_odd_lines(vTexCoord.y, params.SourceSize);
-        value = 0.5 * (scanlines(lines_even, x, source_height) + scanlines(lines_odd, x, source_height));
+        float pixel_height = 0.5 * src_pixel_height;
+        float half_h = 0.5 * pixel_height;
+        float radius = params.MaxSpotSize + half_h;
+        float p = 0.5 * y;
+        value = (integrate_field(x, p, 0.75, 1, half_h, radius, source_height) +
+                 integrate_field(x, p, 0.25, 0, half_h, radius, source_height)) / src_pixel_height;
     } else {
         // bob
+        float pixel_height = 0.5 * src_pixel_height;
+        float half_h = 0.5 * pixel_height;
+        float radius = params.MaxSpotSize + half_h;
+        float p = 0.5 * y;
         uint phase = (params.OddFieldFirst > 0.5) ? 1u : 0u;
         if ((params.FrameCount + phase) % 2u == 0u) {
             // odd field
-            lines_t lines = get_odd_lines(vTexCoord.y, params.SourceSize);
-            value = scanlines(lines, x, source_height);
+            value = integrate_field(x, p, 0.25, 0, half_h, radius, source_height) / pixel_height;
         } else {
             // even field
-            lines_t lines = get_even_lines(vTexCoord.y, params.SourceSize);
-            value = scanlines(lines, x, source_height);
+            value = integrate_field(x, p, 0.75, 1, half_h, radius, source_height) / pixel_height;
         }
     }
 

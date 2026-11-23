@@ -67,9 +67,10 @@ uvec3 render_scanline_horizontal(vec2 tex_coord, float delta) {
     vec3 width = min(mix(vec3(min_width), moment / energy, notEqual(energy, vec3(0.0))), vec3(params.MaxSpotSize));
     vec3 width_rcp = 1.0 / width;
 
-    // Pre-multiply energy with MaxSpotSize * width_rcp to save vec3 multiplications
-    // per viewport pixel in the vertical scanline pass.
-    vec3 scaled_energy = energy * (energy_scale * params.MaxSpotSize * width_rcp);
+    // Pre-multiply energy with MaxSpotSize for the vertical scanline pass.
+    // width_rcp cancels out when integrating the vertical cubic profile over
+    // the output pixel height.
+    vec3 scaled_energy = energy * (energy_scale * params.MaxSpotSize);
 
     // Pack both scaled_energy and width_rcp into one texture. This avoids an extra
     // pass (since we don't have multiple render target support) and allows

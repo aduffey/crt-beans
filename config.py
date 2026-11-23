@@ -19,7 +19,7 @@ class SimulationConfig:
     ntsc_frame_count: int = 0
 
     # For scanlines, interlacing, and overscan
-    scanline_method: str = 'analytical'  # 'sampled', 'fast', 'fast-cosine', 'analytical'
+    scanline_method: str = 'analytical'  # 'sampled', 'fast', 'fast-point', 'fast-cosine', 'analytical'
     output_resolution: tuple[int, int] = (2160, 2880)
     max_spot_size: float = 0.9
     min_spot_size: float = 0.4
