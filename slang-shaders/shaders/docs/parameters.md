@@ -144,41 +144,41 @@ All bandwidth values are in MHz.
 | Luma bandwidth | S-Video and NTSC | 4.0 | 0.6–6.0 |
 | Chroma bandwidth | S-Video and NTSC | 1.0 | 0.6–2.0 |
 
-Video bandwidth applies the same filtering to all three RGB channels. Chroma bandwidth applies the same filtering to both color channels.
+Video bandwidth applies the same filtering to all three RGB channels. Chroma bandwidth is the nominal −6 dB (half-amplitude) frequency of the low-pass filter applied to each color channel.
 
-In the NTSC preset, these parameters control filtering before the signals are combined into composite video. The decoder also applies a fixed carrier-locked chroma low-pass filter of approximately 1.2 MHz (subcarrier / 3), so increasing chroma bandwidth does not remove all color blurring.
+In the NTSC presets, these parameters control filtering before the signals are combined into composite video. The decoder also applies a fixed carrier-locked chroma low-pass filter with a −6 dB point at approximately 1.2 MHz (subcarrier / 3).
 
 ### Luma trap depth
 
-Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.
+Available in the generic and console-specific NTSC presets.
 
 This reduces brightness detail near the NTSC color subcarrier (approximately 3.58 MHz) before brightness and color are combined into composite video. It can reduce false colors and rainbows on fine text and patterns. The trap acts on the encoder's gamma-domain luma signal, independently of the decoder's Composite Y/C filter setting.
 
-`LumaTrapDepth` ranges from **0 to 32**, with a default of **0** (bypassed). Values are positive attenuation amounts in dB: `6` gives approximately −6 dB, or half the previous luma amplitude at the carrier; `32` leaves approximately 2.5%. The Python CLI uses `--ntsc-luma-trap-depth DB`.
+`LumaTrapDepth` ranges from **0 to 32**. The generic NTSC presets default to **0** (bypassed). Values are positive attenuation amounts in dB: `6` gives approximately −6 dB, or half the previous luma amplitude at the carrier; `32` leaves approximately 2.5%. The Python CLI uses `--ntsc-luma-trap-depth DB`.
 
 The notch width is fixed at roughly 2 MHz. Strong settings can introduce ringing around sharp edges, and enabling the trap increases filtering cost. Use the lowest depth that suppresses unwanted false color.
 
 ### Composite Y/C filter
 
-Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.
+Available in the generic and console-specific NTSC presets.
 
 This parameter controls how the decoder separates brightness (Y) from color (C):
 
 - **Notch (0.0):** A simple notch filter as found on early TVs. This is the blurriest option.
 - **Comb (1.0):** A simple 3-line comb filter as found on high end TVs in the 80's, and common in the 90's. This is a sharper option but causes artifacts on horizontal edges (on some consoles more than others).
-- **Adaptive comb (2.0, default):** A 2D adaptive comb filter as found on TVs in the late 90's into the 2000's. This should avoid most of the artifacts of the 3-line comb but might not be as sharp.
+- **Adaptive comb (2.0, generic default):** A 2D adaptive comb filter as found on TVs in the late 90's into the 2000's. This should avoid most of the artifacts of the 3-line comb but might not be as sharp.
 
 In bob and weave modes on interlaced input, comb filtering uses neighboring scanlines from the same field.
 
 ### NTSC system
 
-Available only in `crt-beans-ntsc` and `crt-beans-fast-ntsc`.
+Available in the generic and console-specific NTSC presets.
 
 This parameter selects the timing model used for the color subcarrier:
 
 | Value | System |
 | --- | --- |
-| 0.0 | Standard NTSC (default) |
+| 0.0 | Standard NTSC (generic default) |
 | 1.0 | NES |
 | 2.0 | Master System |
 | 3.0 | PC Engine / TurboGrafx-16 |
@@ -191,3 +191,24 @@ This parameter selects the timing model used for the color subcarrier:
 This changes the subcarrier spacing across the image, its phase relationship between lines and frames, and the alignment used by the comb filter. It can therefore change artifact patterns as well as their movement.
 
 Choose the system being emulated, or Standard NTSC for a generic timing model. Several models infer the video mode from the input width, so use the core's native output resolution where possible (i.e. turn off any upscaling).
+
+### Console preset defaults
+
+The [console presets](../../ntsc-systems/) share NTSC settings between the normal and fast variants. Encoder settings approximate representative hardware revisions within the shader's available bandwidths and fixed luma trap width.
+
+The shader's chroma filter reaches −3 dB at about 72% of its bandwidth setting. The presets use this response to match estimated hardware −3 dB frequencies and round the resulting settings to the nearest 0.1 MHz.
+
+| System | Luma (MHz) | Chroma (−6 dB, MHz) | Luma trap depth (dB) | Y/C filter | Encoder basis |
+| --- | ---: | ---: | ---: | --- | --- |
+| NES | 6.0 | 2.0 | 0 | Notch | Direct composite synthesis by the RP2C02 (widest available bandwidths). |
+| Master System | 2.0 | 1.1 | 0 | Notch | CXA1145 discrete LC luma/chroma filter circuit (matching Sega's PAL SMS and NTSC Genesis circuits). |
+| PC Engine / TurboGrafx-16 | 5.0 | 2.0 | 0 | Notch | HuC6260 resistive summing network with no external chroma filter or luma trap. |
+| Genesis / Mega Drive | 2.0 | 1.1 | 0 | Notch | Model 1/2 CXA1145 discrete LC luma and chroma filter circuit (no separate luma trap pass). |
+| SNES | 5.0 | 0.8 | 0 | Notch | 1-CHIP / SNES Jr. (S-CPUN + S-RGB); provisional composite estimates below measured RGB edge bandwidth. |
+| Saturn | 6.0 | 0.8 | 16 | Notch | CXA1645M circuit; trap depth is an estimate based on the VA0.5 series-LC topology. |
+| PlayStation | 2.8 | 0.8 | 14 | Adaptive comb | PU-22/23 BH7240AKV circuit with a 56 µH / 33 pF resonant luma trap. |
+| Nintendo 64 | 6.0 | 0.8 | 0 | Adaptive comb | Early ENC-NUS (BA7242F) circuit with wideband external passives and no dedicated luma trap. |
+
+The Saturn and PlayStation encoder circuits are shown in the [Saturn VA0.5 schematic](https://consolemods.org/wiki/images/1/1b/Sega_saturn_va0.5_schematics.pdf) and the [Sony SCPH-9000 service manual](https://archive.org/details/PlayStation_SCPH-9000_Series_Service_Manual_3rd_Edition) (`PU-23`). The [Sony CXA1645 datasheet](https://www.cieri.net/Documenti/Data%20Sheets/Radio%20and%20Video%20ICs/CXA1645P%2C%20CXA1645M%20%28Sony%29.pdf) and [ROHM BH7236AF / BH7240AKV datasheet](https://www.mouser.com/datasheet/2/348/BH7236AF_BH7240AKV_NTSC_PAL_Analog_Video_Encoders-2313627.pdf) describe the encoders' resonant luma traps and internal chroma filters.
+
+The early N64 schematic shows wideband output coupling and protection around the ENC-NUS. The pin-compatible ROHM encoder's block diagram places filtering on the subcarrier-input path, leaving output chroma filtering undocumented; no dedicated luma trap is present. [NUS-CPU-03/04 schematic](https://www.acidmods.com/RDC/NINTENDO/N64/N64_NUS_CPU_03_04.pdf), [ROHM BA7242F datasheet](https://www.alldatasheet.com/datasheet-pdf/pdf/36172/ROHM/BA7242F.html)

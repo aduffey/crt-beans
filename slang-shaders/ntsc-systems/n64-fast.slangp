@@ -1,0 +1,7 @@
+#reference "../crt-beans-fast-ntsc.slangp"
+
+System = 8.0
+FilterType = 2.0
+LumaBandwidth = 6.0
+ChromaBandwidth = 0.8
+LumaTrapDepth = 0.0

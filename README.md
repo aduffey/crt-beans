@@ -41,10 +41,12 @@ See the [parameter documentation](slang-shaders/shaders/docs/parameters.md) for 
 
 Each preset has a fast variant without glow: `crt-beans-fast.slangp`, `crt-beans-fast-rgb.slangp`, and so on.
 
+The [`ntsc-systems/`](slang-shaders/ntsc-systems/) directory has normal and fast NTSC presets for all eight console timing models. These presets set the console timing, encoder bandwidths, luma trap depth, and Y/C filter. NES through Saturn use notch decoding. PlayStation and Nintendo 64 use adaptive comb decoding. See the [console preset notes](slang-shaders/shaders/docs/parameters.md#console-preset-defaults) for the hardware approximations.
+
 For best results:
 
 * Use the core's native output resolution, especially with NTSC; some timing models infer the video mode from the input width.
-* In the NTSC presets, set **NTSC system** to the console being emulated, or use Standard NTSC for generic timing.
+* Use the matching console NTSC preset, or load a generic NTSC preset for Standard NTSC timing.
 * Disable overscan cropping in Retroarch and in the core when using the shader's horizontal and vertical overscan controls.
 
 ## Python reference model
