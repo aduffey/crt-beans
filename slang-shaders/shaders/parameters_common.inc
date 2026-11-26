@@ -14,4 +14,4 @@
 #pragma parameter MaskMitigation "Mask brightness boost" 1.0 0.0 1.0 0.05
 #pragma parameter GlowSigma "Glow width (proportion of screen height)" 0.05 0.01 0.10 0.01
 #pragma parameter GlowAmount "Glow amount (mix ratio)" 0.04 0.0 0.10 0.005
-#pragma parameter OutputGamma "Output gamma (0: sRGB, 1: 2.2 gamma)" 1.0 0.0 1.0 1.0
+#pragma parameter OutputGamma "Output gamma (0: sRGB, 1: 2.2, 2: 2.4)" 1.0 0.0 2.0 1.0

@@ -71,13 +71,13 @@ vec3 dither_srgb(vec3 rgb, ivec2 icoords) {
 }
 
 // Apply a simple 8-bit dither to minimize banding in the glow.
-vec3 dither_gamma(vec3 rgb, ivec2 icoords) {
+vec3 dither_gamma(vec3 rgb, ivec2 icoords, float gamma) {
     vec3 noise = blue_noise(icoords);
 
     const float quantum = 1.0 / 255.0;
-    vec3 lower = floor(linear_to_gamma(rgb, 2.2) / quantum) * quantum;
+    vec3 lower = floor(linear_to_gamma(rgb, gamma) / quantum) * quantum;
     vec3 upper = lower + quantum;
-    vec3 threshold = mix(gamma_to_linear(lower, 2.2), gamma_to_linear(upper, 2.2), noise);
+    vec3 threshold = mix(gamma_to_linear(lower, gamma), gamma_to_linear(upper, gamma), noise);
     return mix(lower, upper, lessThan(threshold, rgb));
 }
 
@@ -88,8 +88,10 @@ void main() {
     vec3 out_value = mix(scanlines_value, blur_value, params.GlowAmount);
     if (params.OutputGamma < 0.5) {
         out_value = dither_srgb(out_value, icoords);
+    } else if (params.OutputGamma < 1.5) {
+        out_value = dither_gamma(out_value, icoords, 2.2);
     } else {
-        out_value = dither_gamma(out_value, icoords);
+        out_value = dither_gamma(out_value, icoords, 2.4);
     }
     FragColor = vec4(out_value, 1.0);
 }

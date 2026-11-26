@@ -12,4 +12,4 @@
 #pragma parameter SubpixelMaskPattern "Static mask width (pixels per repeat)" 4.0 2.0 5.0 1.0
 #pragma parameter DynamicMaskTriads "Dynamic mask phosphor triads (per screen width)" 550.0 400.0 800.0 25.0
 #pragma parameter MaskMitigation "Mask brightness boost" 1.0 0.0 1.0 0.05
-#pragma parameter OutputGamma "Output gamma (0: sRGB, 1: 2.2 gamma)" 1.0 0.0 1.0 1.0
+#pragma parameter OutputGamma "Output gamma (0: sRGB, 1: 2.2, 2: 2.4)" 1.0 0.0 2.0 1.0

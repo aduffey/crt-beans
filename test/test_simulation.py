@@ -2,6 +2,7 @@ import unittest
 import numpy as np
 from config import SimulationConfig, Config, DEFAULT_CONFIG
 import sim_taichi
+import common
 import filtering
 import spot_sim
 import masking
@@ -32,6 +33,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.min_spot_size, 0.4)
         self.assertEqual(cfg.interlacing_type, 'weave')
         self.assertTrue(cfg.odd_field_first)
+        self.assertEqual(cfg.output_gamma, 'srgb')
 
     def test_custom_config(self):
         cfg = SimulationConfig(
@@ -50,6 +52,7 @@ class TestSimulationConfig(unittest.TestCase):
             output_resolution=(240, 320),
             interlacing_type='bob',
             odd_field_first=False,
+            output_gamma='2.4',
         )
         self.assertFalse(cfg.enable_analog)
         self.assertEqual(cfg.analog_type, 'svideo')
@@ -66,6 +69,7 @@ class TestSimulationConfig(unittest.TestCase):
         self.assertEqual(cfg.output_resolution, (240, 320))
         self.assertEqual(cfg.interlacing_type, 'bob')
         self.assertFalse(cfg.odd_field_first)
+        self.assertEqual(cfg.output_gamma, '2.4')
 
 
 class TestAnalogSimulation(unittest.TestCase):
@@ -1116,6 +1120,51 @@ class TestFullSimulation(unittest.TestCase):
             self.assertTrue(np.all(np.isfinite(out)))
 
 
+class TestOutputGamma(unittest.TestCase):
+    def test_linear_to_gamma_values_and_clamping(self):
+        img = np.array([[[-0.1, 0.0, 0.01], [0.18, 0.5, 1.0], [0.25, 1.2, 0.75]]], dtype=np.float32)
+        for gamma in (2.2, 2.4):
+            with self.subTest(gamma=gamma):
+                out = common.linear_to_gamma(img, gamma)
+                self.assertEqual(out.shape, img.shape)
+                self.assertEqual(out.dtype, np.uint8)
+                expected = np.around(np.power(np.clip(img, 0.0, 1.0), 1.0 / gamma) * 255).astype(np.uint8)
+                np.testing.assert_array_equal(out, expected)
+                self.assertEqual(int(out[0, 0, 0]), 0)
+                self.assertEqual(int(out[0, 0, 1]), 0)
+                self.assertEqual(int(out[0, 1, 2]), 255)
+                self.assertEqual(int(out[0, 2, 1]), 255)
+
+    def test_linear_to_output_modes_and_ordering(self):
+        ramp = np.linspace(0.0, 1.0, 256, dtype=np.float32).reshape(16, 16, 1)
+        ramp_rgb = np.repeat(ramp, 3, axis=2)
+
+        out_srgb = common.linear_to_output(ramp_rgb, 'srgb')
+        out_22 = common.linear_to_output(ramp_rgb, '2.2')
+        out_24 = common.linear_to_output(ramp_rgb, '2.4')
+
+        np.testing.assert_array_equal(out_srgb, common.linear_to_srgb(ramp_rgb))
+        np.testing.assert_array_equal(out_22, common.linear_to_gamma(ramp_rgb, 2.2))
+        np.testing.assert_array_equal(out_24, common.linear_to_gamma(ramp_rgb, 2.4))
+
+        # Higher display gamma requires higher encoded code values for interior linear intensities.
+        self.assertTrue(np.all(out_24 >= out_22))
+        self.assertTrue(np.any(out_24 > out_22))
+
+        # Round-trip through gamma_to_linear stays within 8-bit quantization tolerance.
+        for mode, gamma in (('2.2', 2.2), ('2.4', 2.4)):
+            encoded = common.linear_to_output(ramp_rgb, mode)
+            recovered = common.gamma_to_linear(encoded.astype(np.float32) / 255.0, gamma)
+            self.assertTrue(np.all(np.isfinite(recovered)))
+            # Max linear error from +/- 0.5/255 gamma-domain rounding is bounded by gamma * (0.5 / 255).
+            np.testing.assert_allclose(recovered, ramp_rgb, atol=gamma * (0.5 / 255.0) + 1e-4, rtol=0)
+
+    def test_linear_to_output_invalid(self):
+        img = np.zeros((2, 2, 3), dtype=np.float32)
+        with self.assertRaises(ValueError):
+            common.linear_to_output(img, '2.6')
+
+
 class TestCLIParser(unittest.TestCase):
     def test_parser_defaults(self):
         parser = sim_taichi.build_parser()
@@ -1138,6 +1187,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.diffusion_type, 'gaussian')
         self.assertEqual(args.interlacing_type, 'weave')
         self.assertTrue(args.odd_field_first)
+        self.assertEqual(args.output_gamma, 'srgb')
 
     def test_parser_overrides(self):
         parser = sim_taichi.build_parser()
@@ -1157,7 +1207,8 @@ class TestCLIParser(unittest.TestCase):
             '--no-odd-field-first',
             '--no-masking',
             '--no-diffusion',
-            '--output-resolution', '720', '960'
+            '--output-resolution', '720', '960',
+            '--output-gamma', '2.4',
         ])
         self.assertEqual(args.scanline_method, 'fast')
         self.assertFalse(args.enable_analog)
@@ -1174,6 +1225,7 @@ class TestCLIParser(unittest.TestCase):
         self.assertFalse(args.masking)
         self.assertFalse(args.diffusion)
         self.assertEqual(args.output_resolution, [720, 960])
+        self.assertEqual(args.output_gamma, '2.4')
 
 
 if __name__ == '__main__':

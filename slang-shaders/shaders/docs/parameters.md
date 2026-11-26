@@ -2,7 +2,17 @@
 
 ## Output gamma
 
-This should be set to the gamma of your TV or monitor. Most people will not need to change this. Most TVs and monitors are calibrated roughly to a pure power function gamma of 2.2, which is the default setting. Some monitors are calibrated to the actual sRGB gamma with a linear section near black. The difference is mostly noticeable in the glow, but can be significant. You can check which one your monitor uses with [this shadertoy](https://www.shadertoy.com/view/7sjBWD).
+This should be set to the gamma of your TV or monitor.
+
+| Value | Output gamma |
+| --- | --- |
+| 0 | sRGB |
+| 1 | 2.2 (default) |
+| 2 | 2.4 |
+
+Most people will not need to change this. Most monitors and many TVs are calibrated roughly to a pure power function gamma of 2.2, which is the default setting. Many TVs (especially OLEDs and sets calibrated for dark-room viewing or BT.1886) use a pure power function gamma of 2.4. Some monitors are calibrated to the actual sRGB gamma with a linear section near black. The difference is mostly noticeable in the glow, but can be significant. You can check whether your display uses sRGB or a 2.2 power gamma with [this shadertoy](https://www.shadertoy.com/view/7sjBWD).
+
+The Python reference exposes the same options via `--output-gamma` (`srgb`, `2.2`, or `2.4`; default `srgb` for PNG output).
 
 ## Horizontal and vertical overscan
 

@@ -54,6 +54,25 @@ def linear_to_srgb(img):
     return out
 
 
+def linear_to_gamma(img, out_gamma):
+    """Linear float to simple gamma uint8"""
+    img_clipped = np.clip(img, 0.0, 1.0)
+    out = np.power(img_clipped, 1.0 / out_gamma)
+    out = np.around(out * 255).astype(np.uint8)
+    return out
+
+
+def linear_to_output(img, output_gamma='srgb'):
+    """Linear float to uint8 using the selected output transfer function"""
+    if output_gamma == 'srgb':
+        return linear_to_srgb(img)
+    if output_gamma == '2.2':
+        return linear_to_gamma(img, 2.2)
+    if output_gamma == '2.4':
+        return linear_to_gamma(img, 2.4)
+    raise ValueError(f'Unknown output_gamma: {output_gamma!r}')
+
+
 @ti.func
 def texelFetch(Source: ti.template(), vTexCoords: tm.ivec2) -> tm.vec3:
     """Fetch pixel from img at (x, y), or 0 if outside range"""

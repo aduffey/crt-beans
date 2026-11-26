@@ -44,6 +44,9 @@ class SimulationConfig:
     blur_sigma: float = 0.05
     blur_amount: float = 0.04  # 0.15, 0.13
 
+    # Output
+    output_gamma: str = 'srgb'  # 'srgb', '2.2', '2.4'
+
 
 
 Config = SimulationConfig

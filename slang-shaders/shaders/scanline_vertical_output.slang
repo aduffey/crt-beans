@@ -58,8 +58,10 @@ void main() {
     vec3 value = render_scanlines(vTexCoord, viewportCoord);
     if (params.OutputGamma < 0.5) {
         value = linear_to_srgb(value);
-    } else {
+    } else if (params.OutputGamma < 1.5) {
         value = linear_to_gamma(value, 2.2);
+    } else {
+        value = linear_to_gamma(value, 2.4);
     }
     FragColor = vec4(value, 1.0);
 }

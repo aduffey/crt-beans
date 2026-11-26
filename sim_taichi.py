@@ -9,7 +9,7 @@ from imageio.v3 import imwrite, imread
 
 # Import configuration, helpers, and submodules
 from config import SimulationConfig, Config, DEFAULT_CONFIG
-from common import gamma_to_linear, linear_to_srgb
+from common import gamma_to_linear, linear_to_output, linear_to_srgb
 from filtering import simulate_analog
 from spot_sim import simulate_spot
 from masking import apply_mask
@@ -195,6 +195,12 @@ def build_parser():
     parser.add_argument('--blur-amount', type=float, default=DEFAULT_CONFIG.blur_amount,
                         help='Diffusion glow blend amount')
 
+    # Output options
+    parser.add_argument('--output-gamma', dest='output_gamma',
+                        choices=['srgb', '2.2', '2.4'],
+                        default=DEFAULT_CONFIG.output_gamma,
+                        help='Output transfer function (srgb, 2.2, or 2.4)')
+
     return parser
 
 
@@ -233,6 +239,7 @@ def main():
         diffusion_type=args.diffusion_type,
         blur_sigma=args.blur_sigma,
         blur_amount=args.blur_amount,
+        output_gamma=args.output_gamma,
     )
 
     # Read image
@@ -242,11 +249,11 @@ def main():
     # Simulate
     img_crt = simulate(img_float, config=config)
 
-    # To sRGB
-    print('Color transform and save...')
-    img_final_srgb = linear_to_srgb(img_crt)
+    # Output color transform
+    print(f'Color transform ({config.output_gamma}) and save...')
+    img_final = linear_to_output(img_crt, config.output_gamma)
 
-    imwrite(args.output, img_final_srgb)
+    imwrite(args.output, img_final)
 
 
 if __name__ == '__main__':
