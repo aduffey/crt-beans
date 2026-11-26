@@ -8,13 +8,9 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 
 layout(push_constant) uniform Push {
     vec4 SourceSize;
-    float MaxSpotSize;
-    float MinSpotSize;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
-
-#include "parameters_common.inc"
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -29,11 +25,12 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
+
+#include "../colorspace/conversions.inc"
 
 void main() {
-    ivec2 pix_loc = ivec2(floor(vTexCoord * params.SourceSize.xy));
-    vec3 sample_value = texelFetch(Source, pix_loc, 0).rgb;
-    vec3 width_rcp =  1.0 / (params.MinSpotSize * params.MaxSpotSize - sqrt(sample_value) * (params.MinSpotSize * params.MaxSpotSize - params.MaxSpotSize));
-    FragColor.rgb = width_rcp;
+    ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
+    vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
+    FragColor = vec4(gamma_to_linear(rgb, CRT_GAMMA), 1.0);
 }

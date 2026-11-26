@@ -1,0 +1,805 @@
+from dataclasses import dataclass
+import numpy as np
+import taichi as ti
+import taichi.math as tm
+from common import texelFetch, gamma_to_yuv, yuv_to_linear, gamma_to_linear
+
+
+CHROMA_SUBCARRIER = (315.0 / 88.0) * 1e6
+ACTIVE_LINE_TIME = 52.5e-6
+
+
+def luma_trap_strength(depth: float) -> float:
+    """Return the linear notch strength for an NTSC luma-trap depth in dB."""
+    if not np.isfinite(depth) or not 0.0 <= depth <= 32.0:
+        raise ValueError('NTSC luma trap depth must be between 0 and 32 dB')
+    if depth == 0.0:
+        return 0.0
+    return float(1.0 - 10.0 ** (-depth / 20.0))
+
+
+@dataclass(frozen=True)
+class ChromaInfo:
+    periods_per_active_line: float
+    periods_per_line: float
+    offset_per_frame: float
+
+
+def chroma_info_standard() -> ChromaInfo:
+    periods_per_active_line = CHROMA_SUBCARRIER * ACTIVE_LINE_TIME
+    return ChromaInfo(periods_per_active_line, 227.5, 0.5)
+
+
+def chroma_info_nes(original_width: float, frame_count: int = 0) -> ChromaInfo:
+    periods_per_active_line = (4.0 / 6.0) * original_width
+    return ChromaInfo(periods_per_active_line, 682.0 / 3.0, 1.0 / 3.0)
+
+
+def chroma_info_sms(original_width: float) -> ChromaInfo:
+    periods_per_active_line = (10.0 / 15.0) * original_width
+    return ChromaInfo(periods_per_active_line, 228.0, 0.0)
+
+
+def chroma_info_pce(original_width: float) -> ChromaInfo:
+    periods_per_active_line = (2.0 / 6.0) * original_width
+    if original_width < 300.0:
+        periods_per_active_line = (4.0 / 6.0) * original_width
+    elif original_width < 450.0:
+        periods_per_active_line = (3.0 / 6.0) * original_width
+    elif original_width > 700.0:
+        periods_per_active_line = (1.0 / 6.0) * original_width
+    return ChromaInfo(periods_per_active_line, 227.5, 0.5)
+
+
+def chroma_info_genesis(original_width: float) -> ChromaInfo:
+    if original_width > 1000.0:
+        periods_per_active_line = (2.0 / 15.0) * original_width
+    elif original_width > 300.0:
+        periods_per_active_line = (8.0 / 15.0) * original_width
+    else:
+        periods_per_active_line = (10.0 / 15.0) * original_width
+    return ChromaInfo(periods_per_active_line, 228.0, 0.0)
+
+
+def chroma_info_snes(original_width: float, frame_count: int = 0) -> ChromaInfo:
+    periods_per_active_line = (2.0 / 6.0) * original_width
+    if original_width < 300.0:
+        periods_per_active_line = (4.0 / 6.0) * original_width
+    return ChromaInfo(periods_per_active_line, 682.0 / 3.0, 1.0 / 3.0)
+
+
+def chroma_info_saturn(original_width: float) -> ChromaInfo:
+    periods_per_active_line = original_width / 4.0
+    if original_width < 340.0:
+        periods_per_active_line = (65.0 / (2.0 * 61.0)) * original_width
+    elif original_width < 400.0:
+        periods_per_active_line = original_width / 2.0
+    elif original_width < 680.0:
+        periods_per_active_line = (65.0 / (4.0 * 61.0)) * original_width
+    return ChromaInfo(periods_per_active_line, 227.5, 0.5)
+
+
+def chroma_info_psx(original_width: float) -> ChromaInfo:
+    # Pixel-clock divisors for 256/320/368/512/640 modes, with capture padding.
+    # The NTSC video clock is 15 times the chroma subcarrier frequency.
+    periods_per_active_line = original_width * 4.0 / 15.0
+    if original_width <= 280.0:
+        periods_per_active_line = original_width * 10.0 / 15.0
+    elif original_width <= 350.0:
+        periods_per_active_line = original_width * 8.0 / 15.0
+    elif original_width <= 400.0:
+        periods_per_active_line = original_width * 7.0 / 15.0
+    elif original_width <= 560.0:
+        periods_per_active_line = original_width * 5.0 / 15.0
+    elif original_width > 2000.0:
+        periods_per_active_line = original_width * 1.0 / 15.0
+    return ChromaInfo(periods_per_active_line, 227.5, 0.5)
+
+
+def chroma_info_n64() -> ChromaInfo:
+    periods_per_active_line = (640.0 * 227.5) / 773.5
+    return ChromaInfo(periods_per_active_line, 227.5, 0.5)
+
+
+# Platform aliases
+chroma_info_tg16 = chroma_info_pce
+chroma_info_megadrive = chroma_info_genesis
+chroma_info_ps1 = chroma_info_psx
+
+
+def get_chroma_info(system: str, original_width: float, frame_count: int = 0) -> ChromaInfo:
+    """Derive system-specific NTSC subcarrier timing information.
+
+    Matches timing derivations in slang-shaders/shaders/analog/chroma_carrier.inc
+    and verified console hardware specifications.
+    """
+    sys_str = system.lower()
+    if sys_str == 'nes':
+        return chroma_info_nes(original_width, frame_count)
+    elif sys_str == 'sms':
+        return chroma_info_sms(original_width)
+    elif sys_str in ('tg16', 'pce'):
+        return chroma_info_pce(original_width)
+    elif sys_str in ('genesis', 'megadrive'):
+        return chroma_info_genesis(original_width)
+    elif sys_str == 'snes':
+        return chroma_info_snes(original_width, frame_count)
+    elif sys_str == 'saturn':
+        return chroma_info_saturn(original_width)
+    elif sys_str in ('ps1', 'psx'):
+        return chroma_info_psx(original_width)
+    elif sys_str == 'n64':
+        return chroma_info_n64()
+    return chroma_info_standard()
+
+
+def eval_chroma_carrier(
+    t: float, line: int, frame_count: int,
+    periods_per_active_line: float,
+    periods_per_line: float,
+    offset_per_frame: float,
+    interlaced: int | bool = False,
+    odd_field_first: int | bool = True,
+) -> float:
+    pos_val = periods_per_active_line * t
+    position_offset = pos_val - np.floor(pos_val)
+    line_fract = periods_per_line - np.floor(periods_per_line)
+    if interlaced:
+        is_even_field = line % 2
+        field_line = line // 2
+        phase_shift = 0 if odd_field_first else 1
+        effective_frame = frame_count + phase_shift
+        interlaced_frame = ((effective_frame + 4 - is_even_field) // 2) % 2
+        raw_offset = 3 * interlaced_frame + 5 * is_even_field
+        field_line_offset = raw_offset - 6 if raw_offset >= 6 else raw_offset
+        line_offset = line_fract * (field_line + field_line_offset)
+        frame_offset = 0.0
+    else:
+        line_offset = line_fract * line
+        frame_offset = offset_per_frame * (frame_count % 2)
+    return float(2.0 * np.pi * (position_offset + line_offset + frame_offset))
+
+
+@ti.func
+def chroma_carrier(t: float, line: int, frame_count: int,
+                   periods_per_active_line: float,
+                   periods_per_line: float,
+                   offset_per_frame: float,
+                   interlaced: int,
+                   odd_field_first: int) -> float:
+    pos_val = periods_per_active_line * t
+    position_offset = pos_val - tm.floor(pos_val)
+    line_fract = periods_per_line - tm.floor(periods_per_line)
+    line_offset = 0.0
+    frame_offset = 0.0
+    if interlaced != 0:
+        is_even_field = line % 2
+        field_line = line // 2
+        phase_shift = 1 if odd_field_first == 0 else 0
+        effective_frame = frame_count + phase_shift
+        interlaced_frame = ((effective_frame + 4 - is_even_field) // 2) % 2
+        raw_offset = 3 * interlaced_frame + 5 * is_even_field
+        field_line_offset = raw_offset - 6 if raw_offset >= 6 else raw_offset
+        line_offset = line_fract * (field_line + field_line_offset)
+    else:
+        line_offset = line_fract * line
+        frame_offset = offset_per_frame * (frame_count % 2)
+    return 2.0 * np.pi * (position_offset + line_offset + frame_offset)
+
+
+@ti.func
+def lagrange_4tap(u: float) -> tm.vec4:
+    u2 = u * u - 0.25
+    e3 = 0.25 * u2
+    e1 = 0.5 - e3
+    o3 = (1.0 / 6.0) * u * u2
+    o1 = u - 3.0 * o3
+    return tm.vec4(e3 - o3, e1 - o1, e1 + o1, e3 + o3)
+
+
+@ti.func
+def interpolate_chroma(coord_x: float, target_y: int, Source: ti.template(), samples: int, height: int) -> tm.vec3:
+    result = tm.vec3(0.0, 0.0, 0.0)
+    if 0 <= target_y < height:
+        texel_coord = coord_x * samples
+        texel_floor = tm.floor(texel_coord - 0.5)
+        d = (texel_coord - 0.5) - texel_floor
+        u = d - 0.5
+        w = lagrange_4tap(u)
+        base_x = int(texel_floor)
+        for k in ti.static([-1, 0, 1, 2]):
+            weight = 0.0
+            if k == -1:
+                weight = w.x
+            elif k == 0:
+                weight = w.y
+            elif k == 1:
+                weight = w.z
+            else:
+                weight = w.w
+            sx = base_x + k
+            if 0 <= sx < samples:
+                s = Source[target_y, sx]
+                result += weight * tm.vec3(s.y, s.z, s.w)
+    return result
+
+
+@ti.func
+def yuv_to_linear_taichi(yuv: tm.vec3, gamma: float) -> tm.vec3:
+    r = yuv.x + 1.13988303 * yuv.z
+    g = yuv.x - 0.39464234 * yuv.y - 0.58062185 * yuv.z
+    b = yuv.x + 2.03206187 * yuv.y
+    rgb = tm.clamp(tm.vec3(r, g, b), 0.0, 1.0)
+    return tm.pow(rgb, gamma)
+
+
+def filter_fragment(image_in, output_dim, L: tm.vec3):
+    (out_height, out_width, out_planes) = output_dim
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_out = np.empty((out_height, out_width, 3), dtype=np.float32)
+    taichi_filter_fragment(field_in, field_out, L)
+    return field_out
+
+
+@ti.kernel
+def taichi_filter_fragment(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    L: tm.vec3,
+):
+    (in_height, in_width) = field_in.shape
+    (out_height, out_width) = field_out.shape
+    SourceSize = tm.vec4(in_width, in_height, 1 / in_width, 1 / in_height)
+    for y, x in field_out:
+        vTexCoord = tm.vec2((x + 0.5) / out_width, (y + 0.5) / out_height)
+        field_out[y, x] = filter_sim2(vTexCoord, field_in, SourceSize, L)
+    return
+
+
+@ti.func
+def filter_sim(vTexCoord: tm.vec2, Source: ti.template(), SourceSize: tm.vec4, L: tm.vec3) -> tm.vec3:
+    max_L = tm.max(tm.max(L.r, L.g), L.b)
+    L_rcp = 1.0 / L
+
+    filtered = tm.vec3(0.0)
+    pix_y = int(tm.floor(vTexCoord.y * SourceSize.y))
+    t = vTexCoord.x
+    for pix_x in range(int(tm.floor(SourceSize.x * (vTexCoord.x - max_L))),
+                       int(tm.floor(SourceSize.x * (vTexCoord.x + max_L))) + 1):
+        s = texelFetch(Source, tm.ivec2(pix_x, pix_y))
+        t0 = tm.vec3(pix_x * SourceSize.z)
+        t1 = t0 + tm.vec3(SourceSize.z)
+        t0 = tm.clamp(t0, t - L, t + L)
+        t1 = tm.clamp(t1, t - L, t + L)
+        # Integral of s * (1 / L) * (0.5 + 0.5 * cos(PI * (t - t_x) / L)) dt_x over t0 to t1
+        filtered += 0.5 * s * L_rcp * (t1 - t0 + (L / np.pi) *
+                                       (tm.sin(L_rcp * ((np.pi * t) - np.pi * t0)) - tm.sin(L_rcp * ((np.pi * t) - np.pi * t1))))
+    return filtered
+
+
+@ti.func
+def filter_sim2(vTexCoord: tm.vec2, Source: ti.template(), SourceSize: tm.vec4, L: tm.vec3) -> tm.vec3:
+    max_L = tm.max(tm.max(L.r, L.g), L.b)
+
+    filtered = tm.vec3(0.0)
+    pix_y = int(tm.floor(vTexCoord.y * SourceSize.y))
+    t = vTexCoord.x
+
+    # Set up loop bounds
+    start = int(tm.floor(SourceSize.x * (vTexCoord.x - max_L)))
+    end = int(tm.floor(SourceSize.x * (vTexCoord.x + max_L))) + 1
+
+    # Set up the first common term for the left. The right side of the integral
+    # for iteration i is the left side of the integral for iteration i + 1, so
+    # we can avoid computing the term twice.
+    t0 = start * SourceSize.z
+    u0 = tm.clamp((t - t0) / L, -1.0, 1.0)
+    left = np.pi * u0 + tm.sin(np.pi * u0)
+    for pix_x in range(start, end):
+        # Integral of s / L * (0.5 + 0.5 * cos(PI * (t - t_x) / L)) dt_x over t0 to t1
+        s = texelFetch(Source, tm.ivec2(pix_x, pix_y))
+        t1 = (pix_x + 1) * SourceSize.z
+        u1 = tm.clamp((t - t1) / L, -1.0, 1.0)
+        right = np.pi * u1 + tm.sin(np.pi * u1)
+        filtered += s * (left - right)
+        left = right
+    return filtered / (np.pi * 2.0)
+
+
+@ti.func
+def luma_trap_sample(
+    field_yuv: ti.template(),
+    y: int,
+    x: int,
+    samples: int,
+    periods_per_active_line: float,
+    strength: float,
+) -> float:
+    """Apply the carrier-locked triangle-windowed luma trap to a filtered scanline."""
+    luma = field_yuv[y, x].x
+    if strength > 0.0 and periods_per_active_line > 0.0:
+        width = 2.0 * samples / periods_per_active_line
+        if width >= 4.0:
+            width_rcp = 1.0 / width
+            omega_c = 2.0 * np.pi * periods_per_active_line / samples
+            radius = int(tm.floor(width))
+            trap = 0.0
+            norm = 0.0
+            for i in range(1, radius + 1):
+                c = tm.cos(i * omega_c)
+                w = (1.0 - i * width_rcp) * c
+                pos_luma = 0.0
+                neg_luma = 0.0
+                if x + i < samples:
+                    pos_luma = field_yuv[y, x + i].x
+                if x - i >= 0:
+                    neg_luma = field_yuv[y, x - i].x
+                trap += w * (pos_luma + neg_luma - 2.0 * luma)
+                norm += 2.0 * w * (c - 1.0)
+            if norm > 1.0e-5:
+                luma -= strength * trap / norm
+    return luma
+
+
+@ti.kernel
+def taichi_luma_trap_fragment(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    periods_per_active_line: float,
+    strength: float,
+):
+    (height, samples) = field_in.shape
+    for y, x in field_out:
+        yuv = field_in[y, x]
+        yuv.x = luma_trap_sample(
+            field_in, y, x, samples, periods_per_active_line, strength,
+        )
+        field_out[y, x] = yuv
+
+
+@ti.kernel
+def taichi_ntsc_encode_modulate(
+    field_yuv: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_composite: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    frame_count: int,
+    periods_per_active_line: float,
+    periods_per_line: float,
+    offset_per_frame: float,
+    interlaced: int,
+    odd_field_first: int,
+    trap_strength: float,
+):
+    (height, samples) = field_composite.shape
+    for y, x in field_composite:
+        t = (x + 0.5) / samples
+        carrier = chroma_carrier(t, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
+        yuv = field_yuv[y, x]
+        luma = luma_trap_sample(
+            field_yuv, y, x, samples, periods_per_active_line, trap_strength,
+        )
+        field_composite[y, x] = luma + yuv.y * tm.sin(carrier) + yuv.z * tm.cos(carrier)
+
+
+@ti.kernel
+def taichi_ntsc_decode_demodulate(
+    field_composite: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    field_demod: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    frame_count: int,
+    periods_per_active_line: float,
+    periods_per_line: float,
+    offset_per_frame: float,
+    interlaced: int,
+    odd_field_first: int,
+):
+    (height, samples) = field_composite.shape
+    for y, x in field_demod:
+        t = (x + 0.5) / samples
+        carrier = chroma_carrier(t, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
+        comp = field_composite[y, x]
+        chroma_u = comp * 2.0 * tm.sin(carrier)
+        chroma_v = comp * 2.0 * tm.cos(carrier)
+        field_demod[y, x] = tm.vec3(comp, chroma_u, chroma_v)
+
+
+@ti.kernel
+def taichi_ntsc_decode_filter(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec4, ndim=2),
+    chroma_filter_width: float,
+):
+    (height, samples) = field_in.shape
+    width_rcp = 1.0 / chroma_filter_width
+    i_bound = int(tm.floor(chroma_filter_width))
+
+    for y, x in field_out:
+        weight_sum = 0.0
+        chroma = tm.vec2(0.0, 0.0)
+        low_luma = 0.0
+        for i in range(-i_bound, i_bound + 1):
+            coeff = 0.5 + 0.5 * tm.cos(np.pi * i * width_rcp)
+            weight_sum += coeff
+            sample_x = x + i
+            if 0 <= sample_x < samples:
+                sample_val = field_in[y, sample_x]
+                chroma += coeff * tm.vec2(sample_val.y, sample_val.z)
+                low_luma += coeff * sample_val.x
+        if weight_sum > 0.0:
+            chroma = chroma / weight_sum
+            low_luma = low_luma / weight_sum
+        comp = field_in[y, x].x
+        field_out[y, x] = tm.vec4(comp, chroma.x, chroma.y, low_luma)
+
+
+@ti.kernel
+def taichi_ntsc_decode_comb(
+    field_in: ti.types.ndarray(dtype=tm.vec4, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    filter_type: float,
+    frame_count: int,
+    periods_per_active_line: float,
+    periods_per_line: float,
+    offset_per_frame: float,
+    gamma: float,
+    interlaced: int,
+    odd_field_first: int,
+):
+    (height, samples) = field_in.shape
+    line_step = 2 if interlaced != 0 else 1
+    for y, x in field_out:
+        u = (x + 0.5) / samples
+        middle = field_in[y, x]
+        composite = middle.x
+        middle_chroma = tm.vec2(middle.y, middle.z)
+        middle_luma = middle.w
+        chroma = middle_chroma
+
+        if filter_type > 0.5:
+            offset = (227.5 - periods_per_line) / periods_per_active_line
+            upper_chroma = tm.vec2(0.0)
+            lower_chroma = tm.vec2(0.0)
+            upper_luma = 0.0
+            lower_luma = 0.0
+            if offset == 0.0:
+                # Aligned scanlines need no fractional-sample interpolation.
+                if y >= line_step:
+                    s = field_in[y - line_step, x]
+                    upper_chroma = tm.vec2(s.y, s.z)
+                    upper_luma = s.w
+                if y + line_step < height:
+                    s = field_in[y + line_step, x]
+                    lower_chroma = tm.vec2(s.y, s.z)
+                    lower_luma = s.w
+            else:
+                upper_sample = interpolate_chroma(u - offset, y - line_step, field_in, samples, height)
+                lower_sample = interpolate_chroma(u + offset, y + line_step, field_in, samples, height)
+                upper_chroma = tm.vec2(upper_sample.x, upper_sample.y)
+                upper_luma = upper_sample.z
+                lower_chroma = tm.vec2(lower_sample.x, lower_sample.y)
+                lower_luma = lower_sample.z
+
+            if filter_type < 1.5:
+                # 3-line comb with boundary handling
+                if y < line_step:
+                    chroma = 0.5 * middle_chroma + 0.5 * lower_chroma
+                elif y >= height - line_step:
+                    chroma = 0.5 * middle_chroma + 0.5 * upper_chroma
+                else:
+                    chroma = 0.5 * middle_chroma + 0.25 * upper_chroma + 0.25 * lower_chroma
+            else:
+                # Adaptive directional comb with luma-guided cross-color guard
+                uv_scale = tm.vec2(1.0 / 0.436, 1.0 / 0.615)
+                m_scaled = middle_chroma * uv_scale
+                u_scaled = upper_chroma * uv_scale
+                d_scaled = lower_chroma * uv_scale
+
+                diff_u = tm.length(m_scaled - u_scaled)
+                diff_d = tm.length(m_scaled - d_scaled)
+                luma_diff_u = ti.abs(middle_luma - upper_luma)
+                luma_diff_d = ti.abs(middle_luma - lower_luma)
+
+                norm_m = tm.length(m_scaled)
+                norm_u = tm.length(u_scaled)
+                norm_d = tm.length(d_scaled)
+                r_anti_u = tm.length(m_scaled + u_scaled) / (norm_m + norm_u + 1.0e-5)
+                r_anti_d = tm.length(m_scaled + d_scaled) / (norm_m + norm_d + 1.0e-5)
+
+                if y < line_step:
+                    diff_u = 999.0
+                    luma_diff_u = 999.0
+                    r_anti_u = 999.0
+                if y >= height - line_step:
+                    diff_d = 999.0
+                    luma_diff_d = 999.0
+                    r_anti_d = 999.0
+
+                diff_min = tm.min(diff_u, diff_d)
+                diff_sum = diff_u + diff_d + 1.0e-5
+                k_dir = tm.clamp(((diff_u - diff_d) / diff_sum) * 3.0, -1.0, 1.0)
+
+                x_left = tm.max(x - 1, 0)
+                x_right = tm.min(x + 1, samples - 1)
+                s_left = field_in[y, x_left]
+                s_right = field_in[y, x_right]
+                c_left = tm.vec2(s_left.y, s_left.z) * uv_scale
+                c_right = tm.vec2(s_right.y, s_right.z) * uv_scale
+                gh = 0.5 * tm.length(c_right - c_left)
+                r_h = (gh / diff_sum) * (samples / periods_per_active_line)
+                s_g = tm.smoothstep(0.02, 0.05, r_h)
+
+                luma_diff_max = tm.max(luma_diff_u, luma_diff_d)
+                r_sym = tm.length(u_scaled - d_scaled) / diff_sum
+                if y < line_step or y >= height - line_step:
+                    r_sym = 999.0
+
+                cross_guard_3line = (
+                    (1.0 - tm.smoothstep(0.02, 0.08, luma_diff_max))
+                    * (1.0 - tm.smoothstep(0.50, 0.70, r_sym))
+                    * s_g
+                )
+                guard_u = (
+                    (1.0 - tm.smoothstep(0.02, 0.08, luma_diff_u))
+                    * (1.0 - tm.smoothstep(0.50, 0.70, r_anti_u))
+                    * s_g
+                )
+                guard_d = (
+                    (1.0 - tm.smoothstep(0.02, 0.08, luma_diff_d))
+                    * (1.0 - tm.smoothstep(0.50, 0.70, r_anti_d))
+                    * s_g
+                )
+                cross_guard = tm.max(cross_guard_3line, tm.max(guard_u, guard_d))
+
+                k_cross = ((guard_d - guard_u) / (guard_u + guard_d + 1.0e-5)) * (1.0 - cross_guard_3line)
+                k_eff = k_dir * (1.0 - cross_guard) + k_cross * cross_guard
+
+                combed_dir = 0.5 * middle_chroma + 0.25 * ((1.0 - k_eff) * upper_chroma + (1.0 + k_eff) * lower_chroma)
+                if y < line_step:
+                    combed_dir = 0.5 * (middle_chroma + lower_chroma)
+                elif y >= height - line_step:
+                    combed_dir = 0.5 * (middle_chroma + upper_chroma)
+
+                w_base = 1.0 - tm.smoothstep(0.06, 0.24, diff_min)
+                w_comb = tm.max(w_base, cross_guard)
+
+                chroma = tm.mix(middle_chroma, combed_dir, w_comb)
+
+        carrier = chroma_carrier(u, y, frame_count, periods_per_active_line, periods_per_line, offset_per_frame, interlaced, odd_field_first)
+        luma = composite - chroma.x * tm.sin(carrier) - chroma.y * tm.cos(carrier)
+        if gamma > 0.0:
+            field_out[y, x] = yuv_to_linear_taichi(tm.vec3(luma, chroma.x, chroma.y), gamma)
+        else:
+            field_out[y, x] = tm.vec3(luma, chroma.x, chroma.y)
+
+
+@ti.func
+def lanczos3(x: float) -> float:
+    res = 1.0
+    if x >= 1.0e-5:
+        pi_x = np.pi * x
+        res = (tm.sin(pi_x) * tm.sin(pi_x * (1.0 / 3.0))) / (pi_x * pi_x * (1.0 / 3.0))
+    return res
+
+
+@ti.kernel
+def taichi_ntsc_decode_chroma_filter(
+    field_in: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    field_out: ti.types.ndarray(dtype=tm.vec3, ndim=2),
+    chroma_filter_width: float,
+    gamma: float,
+):
+    (height, in_samples) = field_in.shape
+    (_, out_samples) = field_out.shape
+    width_rcp = 1.0 / chroma_filter_width
+
+    for y, x in field_out:
+        tex_x = (x + 0.5) / out_samples * in_samples
+        chroma_start = int(tm.floor(tex_x - chroma_filter_width + 0.5))
+        chroma_stop = int(tm.floor(tex_x + chroma_filter_width - 0.5))
+        luma_start = int(tm.floor(tex_x - 3.0 + 0.5))
+        luma_stop = int(tm.floor(tex_x + 3.0 - 0.5))
+        start_x = tm.min(chroma_start, luma_start)
+        stop_x = tm.max(chroma_stop, luma_stop)
+
+        chroma_weight_sum = 0.0
+        chroma = tm.vec2(0.0, 0.0)
+        luma_weight_sum = 0.0
+        luma = 0.0
+        for ix in range(start_x, stop_x + 1):
+            abs_dx = ti.abs(tex_x - (ix + 0.5))
+            sample_val = tm.vec3(0.0, 0.0, 0.0)
+            if 0 <= ix < in_samples:
+                sample_val = field_in[y, ix]
+            if abs_dx < chroma_filter_width:
+                c_coeff = 0.5 + 0.5 * tm.cos(np.pi * abs_dx * width_rcp)
+                chroma_weight_sum += c_coeff
+                chroma += c_coeff * tm.vec2(sample_val.y, sample_val.z)
+            if abs_dx < 3.0:
+                l_coeff = lanczos3(abs_dx)
+                luma_weight_sum += l_coeff
+                luma += l_coeff * sample_val.x
+        if chroma_weight_sum > 0.0:
+            chroma = chroma / chroma_weight_sum
+        if luma_weight_sum > 0.0:
+            luma = luma / luma_weight_sum
+        field_out[y, x] = yuv_to_linear_taichi(tm.vec3(luma, chroma.x, chroma.y), gamma)
+
+
+def simulate_linearize(image_in: np.ndarray, gamma: float = 2.4) -> np.ndarray:
+    """Direct conversion of input gamma image to linear RGB without analog filtering."""
+    return gamma_to_linear(image_in, gamma)
+
+
+def simulate_rgb(
+    image_in: np.ndarray,
+    samples: int = 1800,
+    gamma: float = 2.4,
+    rgb_bandwidth: float = 4.0e6,
+) -> np.ndarray:
+    """Simulate an analog RGB signal with per-channel horizontal low-pass filtering."""
+    in_h, in_w, _ = image_in.shape
+    L_val = 1.0 / (rgb_bandwidth * ACTIVE_LINE_TIME * 2.0)
+    L = tm.vec3(L_val, L_val, L_val)
+
+    field_in = np.ascontiguousarray(image_in, dtype=np.float32)
+    field_out = np.empty((in_h, samples, 3), dtype=np.float32)
+    taichi_filter_fragment(field_in, field_out, L)
+
+    return gamma_to_linear(field_out, gamma)
+
+
+def simulate_svideo(
+    image_in: np.ndarray,
+    samples: int = 1800,
+    gamma: float = 2.4,
+    luma_bandwidth: float = 4.0e6,
+    chroma_bandwidth: float = 1.0e6,
+) -> np.ndarray:
+    """Simulate an S-Video signal with separate luma and chroma horizontal filtering."""
+    in_h, in_w, _ = image_in.shape
+    yuv_in = gamma_to_yuv(image_in)
+
+    L = tm.vec3(
+        1.0 / (luma_bandwidth * ACTIVE_LINE_TIME * 2.0),
+        1.0 / (chroma_bandwidth * ACTIVE_LINE_TIME * 2.0),
+        1.0 / (chroma_bandwidth * ACTIVE_LINE_TIME * 2.0),
+    )
+
+    field_in = np.ascontiguousarray(yuv_in, dtype=np.float32)
+    field_out = np.empty((in_h, samples, 3), dtype=np.float32)
+    taichi_filter_fragment(field_in, field_out, L)
+
+    return yuv_to_linear(field_out, gamma)
+
+
+def simulate_ntsc(
+    image_in: np.ndarray,
+    samples: int = 1800,
+    gamma: float = 2.4,
+    luma_bandwidth: float = 4.0e6,
+    chroma_bandwidth: float = 1.0e6,
+    ntsc_filter_type: str | float = 'adaptive',
+    ntsc_system: str = 'standard',
+    ntsc_frame_count: int = 0,
+    interlacing_type: str | float = 'weave',
+    odd_field_first: bool | float = True,
+    ntsc_luma_trap_depth: float = 0.0,
+    ntsc_samples: int | None = None,
+) -> np.ndarray:
+    """Simulate NTSC composite video encoding and decoding."""
+    trap_strength = luma_trap_strength(ntsc_luma_trap_depth)
+    in_h, in_w, _ = image_in.shape
+    yuv_in = gamma_to_yuv(image_in)
+    internal_samples = ntsc_samples if ntsc_samples is not None else min(samples, 900)
+
+    ci = get_chroma_info(ntsc_system, in_w, ntsc_frame_count)
+    active_line_seconds = ci.periods_per_active_line / CHROMA_SUBCARRIER
+
+    L = tm.vec3(
+        1.0 / (luma_bandwidth * active_line_seconds * 2.0),
+        1.0 / (chroma_bandwidth * active_line_seconds * 2.0),
+        1.0 / (chroma_bandwidth * active_line_seconds * 2.0),
+    )
+
+    is_interlaced_flag = 1 if (in_h > 300 and str(interlacing_type).lower() in ('bob', 'weave', '0', '1', '0.0', '1.0')) else 0
+    odd_field_first_flag = 1 if odd_field_first else 0
+
+    # Pass 1: Horizontal low-pass filter on YUV
+    f_yuv_in = np.ascontiguousarray(yuv_in, dtype=np.float32)
+    f_yuv_filtered = np.empty((in_h, internal_samples, 3), dtype=np.float32)
+    taichi_filter_fragment(f_yuv_in, f_yuv_filtered, L)
+
+    # Pass 2a: Apply optional luma trap and modulate to composite signal
+    f_composite = np.empty((in_h, internal_samples), dtype=np.float32)
+    taichi_ntsc_encode_modulate(
+        f_yuv_filtered, f_composite, ntsc_frame_count,
+        ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
+        is_interlaced_flag, odd_field_first_flag, trap_strength,
+    )
+
+    # Pass 2: Demodulate composite signal
+    f_demod = np.empty((in_h, internal_samples, 3), dtype=np.float32)
+    taichi_ntsc_decode_demodulate(
+        f_composite, f_demod, ntsc_frame_count,
+        ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame,
+        is_interlaced_flag, odd_field_first_flag,
+    )
+
+    # Pass 3: Chroma low-pass filter (carrier-locked Hann window, -6 dB at fc / 3 ~= 1.2 MHz)
+    chroma_filter_width = 1.5 * internal_samples / ci.periods_per_active_line
+    f_demod_filtered = np.empty((in_h, internal_samples, 4), dtype=np.float32)
+    taichi_ntsc_decode_filter(f_demod, f_demod_filtered, chroma_filter_width)
+
+    # Pass 4: Y/C separation comb filter
+    ft_val = 2.0
+    if isinstance(ntsc_filter_type, str):
+        ft_lower = ntsc_filter_type.lower()
+        if ft_lower == 'notch':
+            ft_val = 0.0
+        elif ft_lower == 'comb':
+            ft_val = 1.0
+        elif ft_lower in ('adaptive', 'adaptive_comb'):
+            ft_val = 2.0
+    else:
+        ft_val = float(ntsc_filter_type)
+
+    f_comb_yuv = np.empty((in_h, internal_samples, 3), dtype=np.float32)
+    taichi_ntsc_decode_comb(
+        f_demod_filtered, f_comb_yuv, ft_val, ntsc_frame_count,
+        ci.periods_per_active_line, ci.periods_per_line, ci.offset_per_frame, 0.0,
+        is_interlaced_flag, odd_field_first_flag,
+    )
+
+    # Pass 5: Post-comb chroma low-pass filter, luma resampling, and conversion to linear RGB
+    f_linear_out = np.empty((in_h, samples, 3), dtype=np.float32)
+    taichi_ntsc_decode_chroma_filter(
+        f_comb_yuv, f_linear_out, chroma_filter_width, gamma,
+    )
+
+    return f_linear_out
+
+
+def simulate_analog(
+    image_in: np.ndarray,
+    analog_type: str = 'rgb',
+    samples: int = 1800,
+    gamma: float = 2.4,
+    rgb_bandwidth: float = 4.0e6,
+    luma_bandwidth: float = 4.0e6,
+    chroma_bandwidth: float = 1.0e6,
+    ntsc_filter_type: str = 'adaptive',
+    ntsc_system: str = 'standard',
+    ntsc_frame_count: int = 0,
+    interlacing_type: str | float = 'weave',
+    odd_field_first: bool | float = True,
+    ntsc_luma_trap_depth: float = 0.0,
+) -> np.ndarray:
+    """High-level dispatcher for analog simulation frontends."""
+    if analog_type in (None, 'none', 'linearize', 'disabled', False):
+        return simulate_linearize(image_in, gamma)
+
+    atype = str(analog_type).lower()
+    if atype == 'rgb':
+        return simulate_rgb(image_in, samples, gamma, rgb_bandwidth)
+    elif atype in ('svideo', 's-video'):
+        return simulate_svideo(image_in, samples, gamma, luma_bandwidth, chroma_bandwidth)
+    elif atype in ('ntsc', 'composite'):
+        return simulate_ntsc(
+            image_in,
+            samples=samples,
+            gamma=gamma,
+            luma_bandwidth=luma_bandwidth,
+            chroma_bandwidth=chroma_bandwidth,
+            ntsc_filter_type=ntsc_filter_type,
+            ntsc_system=ntsc_system,
+            ntsc_frame_count=ntsc_frame_count,
+            interlacing_type=interlacing_type,
+            odd_field_first=odd_field_first,
+            ntsc_luma_trap_depth=ntsc_luma_trap_depth,
+        )
+    else:
+        raise ValueError(
+            f"Unknown analog type: {analog_type}. "
+            "Supported types: 'none', 'linearize', 'rgb', 'svideo', 'ntsc'."
+        )
+
+
+apply_analog = simulate_analog

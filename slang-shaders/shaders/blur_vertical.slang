@@ -29,7 +29,7 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
 
 /* This is a fast gaussian blur, relying on three tricks:
  *
@@ -76,5 +76,5 @@ void main() {
         value += textureLod(Source, vec2(vTexCoord.x, vTexCoord.y + delta), 0.0).rgb * scale;
     }
 
-    FragColor.rgb = value / weight_sum;
+    FragColor = vec4(value / weight_sum, 1.0);
 }

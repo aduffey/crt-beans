@@ -8,9 +8,12 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 
 layout(push_constant) uniform Push {
     vec4 SourceSize;
+    float Bandwidth;
 } params;
 
 #pragma format R16G16B16A16_SFLOAT
+
+#pragma parameter Bandwidth "Video bandwidth (MHz)" 4.0 0.6 6.0 0.2
 
 #pragma stage vertex
 layout(location = 0) in vec4 Position;
@@ -25,16 +28,13 @@ void main() {
 #pragma stage fragment
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
-layout(binding = 1) uniform sampler2D Source;
+layout(set = 0, binding = 1) uniform sampler2D Source;
 
-#define CRT_GAMMA 2.4
-
-vec3 gamma_to_linear(vec3 rgb) {
-    return pow(clamp(rgb, 0.0, 1.0), vec3(CRT_GAMMA));
-}
+#include "../colorspace/conversions.inc"
+#include "filter.inc"
 
 void main() {
-    ivec2 pix_loc = ivec2(int(floor(vTexCoord.x * params.SourceSize.x)), int(floor(vTexCoord.y * params.SourceSize.y)));
-    vec3 rgb = texelFetch(Source, pix_loc, 0).rgb;
-    FragColor.rgb = gamma_to_linear(rgb);
+    vec3 L = 1.0 / (vec3(params.Bandwidth) * 52.5 * 2.0);
+    vec3 filtered = low_pass(L, vTexCoord, params.SourceSize, Source);
+    FragColor = vec4(gamma_to_linear(filtered, CRT_GAMMA), 1.0);
 }

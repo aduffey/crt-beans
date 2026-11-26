@@ -8,16 +8,66 @@ This is a work-in-progress CRT simulation, prototyped in [Taichi](https://www.ta
 
 The original goal for this project was to accurately simulate the scanline-based raster drawing of a CRT television. Scanlines are simulated in (what I believe is) a novel way, which results in consistent and accurate results regardless of the horizontal input resolution or the output resolution.
 
-There are many highly configurable shaders offering more features than this one. The features and configurable parameters will be kept limited for the sake of simplicity in use and development. The goal is to make pixel art look good, not to accurately simulate any arbitrary CRT television.
+There are many highly configurable shaders offering more features than this one. The features and configurable parameters will be kept limited for the sake of simplicity in use and development.
 
 ## Supported features
 
-Currently, supported features include:
-* A configurable low-pass filter to simulate the limited bandwidth of an analog connection.
-* Optional YIQ encoding to simulate a composite or s-video connection (actual NTSC encoding/decoding is not currently supported).
-* Configurable scanline simulation.
-* Configurable overscan cropping.
-* "Glow" simulation, recreating the glowing areas around bright parts of the screen caused by the scattering of light in the glass.
-* Interlacing support in the Slang shaders.
-* Support for aperture gille masks, either with predefined subpixel layouts or dynamically generated.
-* The Slang shaders have been tested to run in 4k at 60 FPS on a Ryzen 7000 integrated GPU in their default configuration. _Performance is a feature!_
+* RGB and S-Video bandwidth filtering.
+* NTSC composite encoding/decoding with notch, comb, and adaptive comb filters, plus console-specific timing models.
+* Configurable scanlines with brightness-dependent beam width.
+* Bob and weave interlacing, plus VGA line doubling.
+* Horizontal and vertical overscan cropping.
+* Dynamic and subpixel aperture grille masks.
+* Configurable glass diffusion ("glow") in full presets.
+* Fast variants of every preset, omitting glow for improved performance.
+
+See the [parameter documentation](slang-shaders/shaders/docs/parameters.md) for details.
+
+## Shader quick start
+
+1. Copy the contents of `slang-shaders/` into a `crt-beans/` folder inside RetroArch's shader directory.
+2. Load a game, then open **Quick Menu → Shaders**, enable **Video Shaders**, and choose **Load Shader Preset**. Start with `crt-beans.slangp` from the copied folder.
+3. Adjust **Shader Parameters**, then use **Shaders → Save** to save a preset for the game or core. See [RetroArch's shader guide](https://docs.libretro.com/guides/shaders/) for details.
+
+## Choosing a preset
+
+| Preset | Simulation |
+| --- | --- |
+| `crt-beans.slangp` | CRT rendering without analog signal filtering. |
+| `crt-beans-rgb.slangp` | RGB connection with configurable bandwidth. |
+| `crt-beans-s-video.slangp` | S-Video with separate luma and chroma filtering. |
+| `crt-beans-ntsc.slangp` | NTSC composite with color artifacts and selectable Y/C separation. |
+| `crt-beans-vga.slangp` | VGA line doubling below 350 lines, monitor-like beam widths, and no mask by default. |
+
+Each preset has a fast variant without glow: `crt-beans-fast.slangp`, `crt-beans-fast-rgb.slangp`, and so on.
+
+The [`ntsc-systems/`](slang-shaders/ntsc-systems/) directory has normal and fast NTSC presets for all eight console timing models. These presets set the console timing, encoder bandwidths, luma trap depth, and Y/C filter. NES through Saturn use notch decoding. PlayStation and Nintendo 64 use adaptive comb decoding. See the [console preset notes](slang-shaders/shaders/docs/parameters.md#console-preset-defaults) for the hardware approximations.
+
+For best results:
+
+* Use the core's native output resolution, especially with NTSC; some timing models infer the video mode from the input width.
+* Use the matching console NTSC preset, or load a generic NTSC preset for Standard NTSC timing.
+* Disable overscan cropping in Retroarch and in the core when using the shader's horizontal and vertical overscan controls.
+
+## Python reference model
+
+The Python/Taichi implementation is a reference model for experiments and still-image rendering. Install [uv](https://docs.astral.sh/uv/) and use Python 3.12 (pinned in `.python-version`). From the repository root:
+
+```sh
+uv sync
+uv run python sim_taichi.py input.png /tmp/output.png --output-resolution 1080 1440
+```
+
+Replace `input.png` with your source image. Resolution is **height, width**; this example produces a 1440×1080 image at 4:3. Use `--help` for the available options.
+
+## Benchmarking shader presets
+
+Benchmark a preset against a shader-disabled baseline using Flatpak RetroArch, Weston, and a hardware Vulkan GPU:
+
+```sh
+uv run python benchmark_shader.py slang-shaders/crt-beans.slangp test_pattern.png
+```
+
+Replace `test_pattern.png` with your test image.
+
+See the [benchmarking guide](docs/benchmarking.md) for setup, measurement details, and validation checks.
